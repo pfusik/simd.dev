@@ -1,0 +1,5 @@
+# Vendored copies of simd-tooltip/dist/ artifacts — repopulate with ./sync.sh.
+dist/
+
+# OS / editor cruft
+.DS_Store

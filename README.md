@@ -33,6 +33,12 @@ ranges where clangd typically shows only the bare signature. Manual
 install via `vsce package` + `code --install-extension`. See
 [`simd-vscode/README.md`](simd-vscode/README.md).
 
+- **[simd.dev/](simd.dev/)** - Static landing page for the project's
+domain. Describes the four pieces above and provides a small
+intrinsic-search box that filters the names index live and renders the
+full record on click. Self-contained after `sync.sh`; deployable to any
+static host.
+
 ## Why?
 
 I like to play with SIMD code but I tend to forget things quickly.

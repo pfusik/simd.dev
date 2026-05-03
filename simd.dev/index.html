@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>simd.dev — SIMD intrinsics, with tooltips</title>
+<meta name="description" content="An open database of ARM and Intel SIMD intrinsics, plus drop-in tooltip tooling for any HTML page, a CLI to bake offline annotations, and a VS Code extension.">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="hero">
+  <h1>simd.dev</h1>
+  <p class="tagline">An open database of SIMD intrinsics, with drop-in tooltip tooling for the web, the terminal, and your editor.</p>
+
+  <div class="cta">
+    <a class="btn primary" href="https://github.com/MarcinZukowski/simd.dev" target="_blank" rel="noopener">View on GitHub →</a>
+  </div>
+</header>
+
+<section class="search">
+  <h2>Search intrinsics</h2>
+  <p class="muted">Type any part of a name. Try
+    <code data-q="_mm256_add">_mm256_add</code>,
+    <code data-q="vfma">vfma</code>,
+    <code data-q="svadd">svadd</code>,
+    <code data-q="__m512">__m512</code>.
+  </p>
+
+  <div class="searchbox">
+    <input id="q" type="search" placeholder="e.g. _mm256_fmadd_ps or vqtbl1q_u8 or svfloat32_t" autocomplete="off" spellcheck="false">
+    <span id="search-status" class="muted"></span>
+  </div>
+
+  <ul id="results" class="results" aria-live="polite"></ul>
+  <div id="card" class="card" hidden></div>
+</section>
+
+<section class="about">
+  <h2>What's here</h2>
+
+  <div class="cards">
+    <article class="about-card">
+      <h3><a href="https://github.com/MarcinZukowski/simd.dev/tree/main/data">data</a></h3>
+      <p><strong>21,484 records</strong> spanning ARM (NEON / Helium / SVE / SVE2 / SME) and Intel (MMX / SSE* / AVX / AVX2 / AVX-512 / AMX) — plus <strong>208 SIMD types</strong>. Each entry has signature, ISA family, arch, short prose description, and (where upstream provides it) pseudocode.</p>
+      <p class="meta">Generated automatically from upstream sources (ARM ACLE, Intel Intrinsics Guide XML, LLVM clang headers). Pure stdlib Python, no LLM in the loop.</p>
+    </article>
+
+    <article class="about-card">
+      <h3><a href="https://github.com/MarcinZukowski/simd.dev/tree/main/simd-tooltip">simd-tooltip</a></h3>
+      <p>Drop-in JavaScript tooltip library — one <code>&lt;script&gt;</code> tag adds hover (or click, or hover-with-<code>?</code>-badge) tooltips to any HTML page. Detects intrinsic names in text on the fly using <code>caretPositionFromPoint</code> — no DOM walk, no markup mutation by default.</p>
+      <p class="meta">~22 KB minified, ~7 KB gzipped. Lazy-loads the data file on first hover.</p>
+    </article>
+
+    <article class="about-card">
+      <h3><a href="https://github.com/MarcinZukowski/simd.dev/tree/main/simd-annotate">simd-annotate</a></h3>
+      <p>A CLI that takes any static HTML file, scans the visible text for intrinsic and type names, and emits a self-contained, <strong>100% offline</strong> HTML file with the library plus only the slice of the database the page actually references embedded inline.</p>
+      <p class="meta">Useful for archived posts, e-book exports, intranet docs. Pure stdlib Python.</p>
+    </article>
+
+    <article class="about-card">
+      <h3><a href="https://github.com/MarcinZukowski/simd.dev/tree/main/simd-vscode">simd-vscode</a></h3>
+      <p>VS Code extension that surfaces the same data as a hover tooltip directly in your editor. Covers all ~22k intrinsics, including the AVX-512 and ARM NEON / SVE / SME ranges where <code>clangd</code> typically shows only the bare signature.</p>
+      <p class="meta">Manual install via <code>vsce package</code> + <code>code --install-extension</code> for now.</p>
+    </article>
+  </div>
+</section>
+
+<section class="why">
+  <h2>Why this exists</h2>
+
+  <p>SIMD code is high-leverage but easy to forget. Every codebase that uses
+     <code>_mm256_fmadd_ps</code>, <code>vqtbl1q_u8</code>, or <code>svadd_s32_z</code>
+     is a codebase whose readers — including its future authors — periodically
+     stop and look up what the intrinsic does. The reference material exists
+     (Intel's Intrinsics Guide, ARM's developer portal, the ACLE spec), but
+     none of it embeds well into a third-party blog post or a code review or
+     an in-editor hover.</p>
+
+  <p>So this project takes the reference material that already exists, hammers
+     it into a clean open database, and adds three thin presentation layers
+     so you can drop intrinsic-aware tooltips into any context that takes
+     plain HTML, plain text, or a VS Code workspace.</p>
+
+  <h3>Related projects</h3>
+  <ul>
+    <li><a href="https://godbolt.org/" target="_blank" rel="noopener">Compiler Explorer</a> has rich hover tooltips on the <em>assembly</em> side, but nothing on the C/C++ source side. Our database covers the source side.</li>
+    <li><strong>clangd</strong> has rich Doxygen for ~15% of Intel intrinsics (mostly SSE/AVX/FMA) and signature-only for AVX-512 and almost all of ARM NEON/SVE/SME. simd-vscode fills the gap.</li>
+    <li><a href="https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html" target="_blank" rel="noopener">Intel's Intrinsics Guide</a> is the upstream we already pull pseudocode from. Beautiful for browsing but you can't embed its tooltips on third-party content.</li>
+    <li><a href="https://simd.info" target="_blank" rel="noopener">simd.info</a> is a much deeper paid reference with a different focus (reading rather than embedding). Not open.</li>
+    <li><a href="https://github.com/google/highway" target="_blank" rel="noopener">Highway</a>'s <code>g3doc/</code> has hand-curated writeups that mention intrinsics inline — kindred spirit but manually maintained.</li>
+  </ul>
+</section>
+
+<footer class="footer">
+  <p>
+    Source on <a href="https://github.com/MarcinZukowski/simd.dev" target="_blank" rel="noopener">GitHub</a>.
+    Database content from ARM ACLE (CC-BY-SA-4.0), Intel Intrinsics Guide, and LLVM clang headers (Apache-2.0 with LLVM exception); see the project's
+    <a href="https://github.com/MarcinZukowski/simd.dev/blob/main/data/NOTICE" target="_blank" rel="noopener">NOTICE</a>.
+  </p>
+</footer>
+
+<script src="dist/simd-tooltips.js" data-on="hover" defer></script>
+<script src="app.js" defer></script>
+
+</body>
+</html>

@@ -1,0 +1,254 @@
+/* simd.dev landing page styles */
+
+:root {
+    --bg: #fdfdfd;
+    --fg: #1d2129;
+    --muted: #5b6677;
+    --accent: #4a7afe;
+    --accent-soft: #e6efff;
+    --code-bg: #f4f6f8;
+    --border: #e3e6ec;
+    --pill: #2c5282;
+    --pill-bg: #e6efff;
+    --warm-pill: #d09a3a;
+    --warm-pill-bg: #fff4e0;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+}
+
+body { max-width: 880px; margin: 0 auto; padding: 0 1.25rem 4rem; }
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+h1, h2, h3 { font-weight: 700; letter-spacing: -0.01em; }
+h1 { font-size: 2.4rem; margin: 0 0 0.4rem; }
+h2 { font-size: 1.4rem; margin: 2.2rem 0 1rem; }
+h3 { font-size: 1.05rem; margin: 0 0 0.4rem; }
+
+code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.92em;
+    background: var(--code-bg);
+    padding: 1px 5px;
+    border-radius: 3px;
+}
+
+pre {
+    margin: 0;
+    background: var(--code-bg);
+    padding: 10px 12px;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 0.92em;
+    line-height: 1.45;
+}
+
+p { margin: 0 0 0.9rem; }
+.muted { color: var(--muted); }
+
+/* Hero */
+.hero { padding: 3rem 0 1.5rem; text-align: center; }
+.tagline { color: var(--muted); font-size: 1.1rem; max-width: 640px; margin: 0 auto 1.4rem; }
+.cta { display: flex; gap: 0.6rem; justify-content: center; flex-wrap: wrap; }
+.btn {
+    display: inline-block;
+    padding: 0.6rem 1.1rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    font-weight: 600;
+    color: var(--fg);
+    background: white;
+    transition: background 0.1s, border-color 0.1s;
+}
+.btn:hover { background: var(--accent-soft); border-color: var(--accent); text-decoration: none; }
+.btn.primary { background: var(--accent); color: white; border-color: var(--accent); }
+.btn.primary:hover { background: #345fdf; border-color: #345fdf; }
+
+/* Search */
+.search { margin-top: 1.5rem; }
+.searchbox {
+    position: relative;
+    display: flex;
+    gap: 0.6rem;
+    align-items: center;
+    margin-top: 0.5rem;
+}
+#q {
+    flex: 1;
+    font: inherit;
+    font-size: 1rem;
+    padding: 0.65rem 0.9rem;
+    border: 1.5px solid var(--border);
+    border-radius: 6px;
+    background: white;
+    transition: border-color 0.1s;
+}
+#q:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+#search-status {
+    font-size: 0.85em;
+    white-space: nowrap;
+}
+
+/* Results list */
+.results {
+    list-style: none;
+    margin: 0.6rem 0 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 0.5rem;
+    max-height: 14rem;
+    overflow-y: auto;
+}
+.results:empty { display: none; }
+.results li {
+    display: inline-block;
+}
+.results button {
+    font: inherit;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.9em;
+    padding: 3px 8px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: white;
+    color: var(--fg);
+    cursor: pointer;
+    transition: background 0.05s, border-color 0.05s;
+}
+.results button:hover, .results button:focus {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+    outline: none;
+}
+.results button.is-type {
+    border-color: var(--warm-pill);
+    background: var(--warm-pill-bg);
+}
+.results button.is-type:hover, .results button.is-type:focus {
+    border-color: var(--warm-pill);
+    background: #fde8c0;
+}
+
+/* Detail card */
+.card {
+    margin-top: 1rem;
+    padding: 1rem 1.1rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: white;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+}
+.card.is-type { border-color: var(--warm-pill); }
+.card-head {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 0.4rem 0.5rem;
+    margin-bottom: 0.6rem;
+}
+.card-head .name {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--fg);
+}
+.tag {
+    font-size: 11px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: var(--pill-bg);
+    color: var(--pill);
+    font-weight: 500;
+}
+.tag.kind { background: var(--warm-pill-bg); color: var(--warm-pill); }
+.tag.arch { background: #ede0f3; color: #6a3c80; }
+.card .signature {
+    margin-bottom: 0.6rem;
+}
+.card .description {
+    margin-bottom: 0.6rem;
+    color: #2d3340;
+}
+.card .pseudocode-toggle {
+    display: block;
+    cursor: pointer;
+    color: var(--accent);
+    font-size: 0.92em;
+    user-select: none;
+    margin-bottom: 0.3rem;
+}
+.card .pseudocode-toggle::before {
+    content: '▶';
+    display: inline-block;
+    width: 14px;
+    color: var(--accent);
+    font-size: 11px;
+}
+.card details[open] .pseudocode-toggle::before { content: '▼'; }
+.card details > pre {
+    max-height: 320px;
+    overflow: auto;
+    font-size: 0.88em;
+    /* ARM ships some SVE pseudocodes as a single-line prose paragraph
+       (no newlines). pre-wrap preserves any newlines that ARE there and
+       wraps long lines at word boundaries -- avoids the "single horizontal
+       scroll line" failure mode. */
+    white-space: pre-wrap;
+}
+.card .upstream-link {
+    display: inline-block;
+    margin-top: 0.6rem;
+    font-size: 0.92em;
+}
+
+/* About cards */
+.cards {
+    display: grid;
+    gap: 0.9rem;
+    grid-template-columns: 1fr 1fr;
+    margin-top: 0.4rem;
+}
+@media (max-width: 640px) { .cards { grid-template-columns: 1fr; } }
+
+.about-card {
+    padding: 1rem 1.1rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: white;
+}
+.about-card h3 { font-size: 1.05rem; margin: 0 0 0.4rem; }
+.about-card h3 a {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.about-card p { font-size: 0.95rem; margin: 0 0 0.5rem; }
+.about-card p:last-child { margin-bottom: 0; }
+.about-card .meta { font-size: 0.85rem; color: var(--muted); }
+
+/* Why / related projects */
+.why ul { padding-left: 1.2rem; }
+.why li { margin-bottom: 0.5rem; }
+
+/* Footer */
+.footer {
+    margin-top: 3rem;
+    padding-top: 1.2rem;
+    border-top: 1px solid var(--border);
+    font-size: 0.88rem;
+    color: var(--muted);
+    text-align: center;
+}
