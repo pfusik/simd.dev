@@ -160,6 +160,11 @@ def arm_records():
         yield {
             "intrinsic": name,
             "aliases": aliases,
+            # The raw ACLE-spec name with bracket markers preserved
+            # (e.g. "[__arm_]vaddq[_u16]"). ARM's developer-portal URLs
+            # are keyed on this exact form, so we keep it for URL
+            # generation downstream.
+            "acle_name": e["name"],
             "arch": archs,
             "family": family,
             "definition": arm_signature(e, name),

@@ -228,9 +228,14 @@ def extract_types(records_path: Path) -> dict[str, dict]:
     return out
 
 
-def doc_url(name: str, source: str) -> str:
+def doc_url(name: str, source: str, acle_name: str | None = None) -> str:
     if source == "arm-acle":
-        return f"https://developer.arm.com/architectures/instruction-sets/intrinsics/{name}"
+        # ARM's developer-portal URLs keep the bracket markers from the ACLE
+        # spec (e.g. "[__arm_]vaddq[_u16]"), so we use the raw acle_name when
+        # we have it. Brackets are URL-encoded for max compatibility -- ARM's
+        # server tolerates either form.
+        slug = (acle_name or name).replace("[", "%5B").replace("]", "%5D")
+        return f"https://developer.arm.com/architectures/instruction-sets/intrinsics/{slug}"
     if source == "intel-iguide":
         return f"https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text={name}"
     return ""
@@ -261,7 +266,7 @@ def main():
                 "description": shorten(r.get("description", "")),
                 "pseudocode": r.get("pseudocode", ""),
                 "source": r["source"],
-                "doc_url": doc_url(name, r["source"]),
+                "doc_url": doc_url(name, r["source"], r.get("acle_name")),
             }
             for a in r.get("aliases", []):
                 alias_targets.setdefault(a, []).append(name)
