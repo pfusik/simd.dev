@@ -26,6 +26,13 @@ intrinsic database the page actually references embedded inline. Useful
 for archived posts, e-book exports, intranet docs.
 See [an example with annotations](simd-annotate/examples/sample.annotated.html).
 
+- **[simd-vscode](simd-vscode/)** - A VS Code extension that surfaces
+the same data as a hover tooltip directly in your editor — covers ~22k
+intrinsics + 208 SIMD types, including the AVX-512 and ARM NEON/SVE/SME
+ranges where clangd typically shows only the bare signature. Manual
+install via `vsce package` + `code --install-extension`. See
+[`simd-vscode/README.md`](simd-vscode/README.md).
+
 ## Why?
 
 I like to play with SIMD code but I tend to forget things quickly.

@@ -1,0 +1,55 @@
+{
+    "name": "simd-vscode",
+    "displayName": "simd-vscode — SIMD intrinsic tooltips",
+    "description": "Hover over SIMD intrinsics (ARM NEON / Helium / SVE / SVE2 / SME, Intel MMX / SSE* / AVX / AVX2 / AVX-512 / AMX) to see signature, ISA family, description, and pseudocode. Backed by the simd.dev intrinsic database.",
+    "version": "0.0.1",
+    "publisher": "simd-dev",
+    "license": "see-NOTICE-file",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/MarcinZukowski/simd.dev"
+    },
+    "engines": {
+        "vscode": "^1.70.0"
+    },
+    "categories": [
+        "Programming Languages",
+        "Other"
+    ],
+    "keywords": [
+        "SIMD",
+        "intrinsics",
+        "NEON",
+        "SVE",
+        "AVX",
+        "AVX-512",
+        "ARM",
+        "Intel"
+    ],
+    "main": "./extension.js",
+    "activationEvents": [
+        "onLanguage:c",
+        "onLanguage:cpp",
+        "onLanguage:objective-c",
+        "onLanguage:objective-cpp"
+    ],
+    "contributes": {
+        "configuration": {
+            "title": "simd-vscode",
+            "properties": {
+                "simdVscode.pseudocode": {
+                    "type": "string",
+                    "enum": ["expanded", "off"],
+                    "default": "expanded",
+                    "description": "Whether to include the upstream pseudocode block in hover tooltips."
+                },
+                "simdVscode.languages": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "default": ["c", "cpp", "objective-c", "objective-cpp"],
+                    "description": "Language IDs where the SIMD hover provider is active."
+                }
+            }
+        }
+    }
+}

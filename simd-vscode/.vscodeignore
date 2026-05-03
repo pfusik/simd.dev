@@ -1,0 +1,8 @@
+# Files NOT to bundle into the .vsix when running `vsce package`.
+# Everything else under simd-vscode/ is included.
+.gitignore
+.vscode/**
+.vscode-test/**
+test/**
+sync.sh
+**/.DS_Store

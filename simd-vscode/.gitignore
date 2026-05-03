@@ -1,0 +1,10 @@
+# The vendored data file is a copy of simd-tooltip/dist/simd-data.json --
+# regenerate with ./sync.sh, do not commit a duplicate.
+data/simd-data.json
+
+# .vsix output of `vsce package`
+*.vsix
+
+# node / vsce cruft (in case the dev path involves them later)
+node_modules/
+.vscode-test/
