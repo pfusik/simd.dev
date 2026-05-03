@@ -1,7 +1,15 @@
-# Ideas — deferred work
+# Ideas — backlog
 
-Backlog of improvements that aren't worth doing yet but are worth not
-forgetting. Each entry should explain *why* before *what*.
+Tracking ideas across three states:
+
+- **[Considered](#considered)** — on the backlog, worth doing
+- **[Done](#done)** — shipped; kept here so the rationale lives alongside
+  the other entries
+- **[Rejected](#rejected)** — looked at, decided not to pursue
+
+Each entry should explain *why* before *what*.
+
+# Considered
 
 ## Plain-formula explanation per intrinsic (LLM with verifier)
 
@@ -77,15 +85,13 @@ not just a `grep`. Only Intel→NEON; the reverse direction has no equivalent
 
 **Why:** the tooltip is good for "what does this do?" — but for a full
 walkthrough, readers want a dedicated page per intrinsic with: signature,
-plain-formula, plain-English, worked example, Compiler Explorer link,
-related-intrinsics graph, cross-arch equivalents, performance notes.
+plain-formula, plain-English, worked example, Compiler Explorer link
+(✅ already shipped — see Done below), related-intrinsics graph,
+cross-arch equivalents, performance notes.
 
 **Sketch:**
 - `scripts/build_pages.py` emits `pages/<intrinsic>.html` (or `.md`) per
   record from the unified DB. ~3 days once the upstream pieces are in.
-- Compiler Explorer URL: deterministic. Template a `#include` + tiny
-  function that calls the intrinsic, encode-base64 into a CE
-  `clientstate=` URL. ~1 day; ships for all 22k.
 - Worked-example numbers from native execution: write a tiny C program
   per intrinsic with canonical inputs, compile, run (native or QEMU
   cross-arch), capture the output. Deterministic, ~1-2 weeks for full
@@ -158,39 +164,24 @@ normal build instead of as a separate post-processing pass.
 - **[Eleventy](https://www.11ty.dev/)** plugin — for the static-site
   community already wiring custom Markdown pipelines.
 
-## VS Code extension
+## VS Code extension — v1 polish (post-v0)
 
-**Why:** the database is the moat; an editor extension is the obvious
-next presentation surface. clangd already covers ~15% of Intel intrinsics
-with rich Doxygen (mostly SSE/AVX/FMA) and signature-only for AVX-512
-and almost all of ARM NEON/SVE/SME — so a `HoverProvider` backed by our
-DB fills a real gap, especially for the ~5,000 AVX-512 and ~14,000 ARM
-intrinsics where clangd shows just the signature.
+**Why:** the v0 extension shipped with hover-only support (see Done
+below). Stretch features that didn't make v0:
 
-**Sketch:**
-- `simd-vscode/` sibling to `simd-tooltip/` and `simd-annotate/`.
-- `package.json` activation on `onLanguage:c` / `onLanguage:cpp`,
-  optionally `markdown` for code fences in prose.
-- `HoverProvider` returning a `MarkdownString`: signature in a fenced
-  block, description, family/arch badges, optional pseudocode block,
-  link to upstream docs.
-- Vendor `simd-tooltip/dist/simd-data.json` directly (~9 MB raw / ~450 KB
-  gzipped is fine for a VS Code extension package).
-- VS Code stacks hover providers, so coexisting with clangd is free
-  for v1 — readers see clangd's content followed by ours; we fill the
-  gaps automatically.
-- Settings: `simd-tooltips.pseudocode = expanded | off` (no "collapsed"
-  -- VS Code hover panels can't do `<details>`).
-- Stretch: a "Show full info" command opens a webview pane that
-  embeds `simd-tooltips.js` directly and renders the rich tooltip
-  layout for the symbol under cursor (effectively the per-intrinsic
-  page from the static-pages idea, but in-IDE).
-
-**Effort:** ~½ day for v0 (working hover, no settings); ~3 days for
-a polished v1 with settings + webview + Marketplace publish. ~300-500
-lines of TypeScript total. Marketplace publish has one-time friction
-(publisher account, signing) but can be automated thereafter via a
-GitHub Action triggered when `simd-tooltip/dist/` changes.
+- **"Show full info" command + webview panel.** Opens a side-by-side
+  pane that loads `simd-tooltips.js` and renders the rich card layout
+  (with collapsible pseudocode, etc.) for the symbol under cursor.
+  Effectively the per-intrinsic page from the static-pages idea, but
+  in-IDE. No more being constrained by VS Code's Markdown-only hover
+  panel.
+- **Marketplace publish.** One-time friction (publisher account,
+  signing) but can be automated thereafter via a GitHub Action that
+  triggers when `simd-tooltip/dist/` changes.
+- **Dedupe with clangd.** v0 stacks happily — both providers' content
+  appears together. For names where clangd has rich Doxygen (most of
+  AVX2 / SSE / FMA) the user sees redundant content. Detect-and-skip
+  in the hover provider would clean that up.
 
 ## Intel arch refinement
 
@@ -223,3 +214,73 @@ index is already small enough to ship to every page; with a fuzzy match
 (e.g., "addmask" → `_mm512_mask_add_pd`) this becomes the keyboard-first
 counterpart to hover detection.
 
+# Done
+
+## VS Code extension (v0)
+
+**Why:** clangd covers ~15% of Intel intrinsics with rich Doxygen
+(mostly SSE / AVX / FMA) and signature-only for AVX-512 and almost all
+of ARM NEON / SVE / SME — so a `HoverProvider` backed by our DB fills a
+real gap, especially for the ~5,000 AVX-512 and ~14,000 ARM intrinsics
+where clangd shows just the signature.
+
+**Shipped:** [`simd-vscode/`](simd-vscode/README.md) — sibling to
+`simd-tooltip/` and `simd-annotate/`. Pure JavaScript, no TypeScript
+build step. Activates on `c` / `cpp` / `objective-c` / `objective-cpp`,
+returns a Markdown card with signature, family/arch badges, description,
+optional pseudocode, links to upstream docs and Compiler Explorer, plus
+a small attribution footer.
+
+**Implementation notes:**
+- ~150 lines of JS, no `node_modules` at runtime.
+- Lazy-loads `simd-data.json` on first hover so VS Code startup is
+  unaffected.
+- Cheap pre-filter (skip identifiers without `_` and shorter than 4
+  chars) avoids hitting the records map for ordinary variable names.
+- Stacks happily with clangd: both providers' content appears in the
+  hover panel.
+- Settings: `simdVscode.pseudocode = expanded | off`,
+  `simdVscode.languages` (defaults to C/C++/ObjC).
+- Manual install only for now: `vsce package` →
+  `code --install-extension simd-vscode/simd-vscode-0.0.1.vsix`.
+- Marketplace publish + webview side-panel are tracked above under
+  "VS Code extension — v1 polish".
+
+## Compiler Explorer URL per intrinsic
+
+**Why:** "what asm does this compile to?" is the natural follow-up
+question after "what does this do?". Compiler Explorer (godbolt.org) is
+the universal tool for that — it supports prefilled URLs that load with
+a ready-to-run example.
+
+**Shipped:** every intrinsic record now generates a godbolt clientstate
+URL on demand. The web tooltip, the simd.dev landing-page result card,
+and the simd-vscode hover all surface a "Compiler Explorer →" link in
+the footer. Click → godbolt opens with a tiny `example()` function that
+calls the intrinsic, the right include headers (`arm_neon.h` +
+`arm_fp16.h` + `arm_bf16.h` for NEON, `arm_sve.h` + `arm_neon_sve_bridge.h`
+for SVE, etc.), and a march that has the relevant optional extensions
+enabled (`+fp16+bf16+i8mm+dotprod+crypto`).
+
+**Implementation notes:**
+- Pure function of existing record fields (signature, ISA family,
+  source). No new bytes added to the data file.
+- Per-arch godbolt compiler IDs: `cclang_trunk` for x86,
+  `armv8-full-cclang-trunk` for aarch64, `armv7-cclang-trunk` for
+  Helium / aarch32. Calibrated against the godbolt API.
+- ARM family priority is least-specific first (Neon → Helium → SVE
+  → SVE2 → SME) so an intrinsic available in both SVE and SME context
+  compiles with the lighter SVE march.
+- Intel CPUID flags are unioned (`AVX512F + AVX512VL` →
+  `-mavx512f -mavx512vl`).
+- `const int` parameters get a literal `0` substituted because they
+  must be compile-time constants.
+- Helper lives in `simd-tooltips.js` and is exposed via
+  `SimdTooltips.compilerExplorerUrl(rec)`. Duplicated in
+  `simd-vscode/extension.js` since it can't load the web library at
+  runtime — ~80 lines of duplication; fine for now.
+
+# Rejected
+
+*Nothing yet — but kept here so future "considered and dropped" items
+have a home.*
