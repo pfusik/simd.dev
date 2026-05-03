@@ -265,6 +265,10 @@ def main():
                 "definition": r["definition"],
                 "description": shorten(r.get("description", "")),
                 "pseudocode": r.get("pseudocode", ""),
+                # Carry the cluster key through so we can build the variants
+                # map after all records are assembled. Stripped from the
+                # output records (replaced by a short cluster id).
+                "_pc_hash": r.get("pseudocode_hash") or "",
                 "source": r["source"],
                 "doc_url": doc_url(name, r["source"], r.get("acle_name")),
             }
@@ -310,6 +314,35 @@ def main():
         "types": sorted(type_names),     # subset of names that are SIMD types
         "ambiguous": ambiguous_aliases,
     }
+    # Group records by upstream-pseudocode hash. Identical pseudocode means
+    # the operation IS identical (modulo whatever the upstream DSL abstracted
+    # out -- type/lane width for ARM ASL, but specific widths for Intel's
+    # <operation>). This catches the common "same op, multiple types" case
+    # cheaply and deterministically.
+    #
+    # We assign each non-singleton cluster a short integer id "C<N>" and
+    # store the cluster -> [members] map separately, with each record
+    # carrying just `cluster: "C<N>"`. Saves bytes vs storing the variant
+    # list per-record.
+    clusters_by_hash: dict[str, list[str]] = {}
+    for name, rec in records.items():
+        h = rec.pop("_pc_hash", "")
+        if h:
+            clusters_by_hash.setdefault(h, []).append(name)
+    clusters: dict[str, list[str]] = {}
+    cluster_id = 0
+    cluster_members_count = 0
+    for h, names_in_cluster in clusters_by_hash.items():
+        if len(names_in_cluster) < 2:
+            continue
+        cid = f"C{cluster_id}"
+        cluster_id += 1
+        members = sorted(names_in_cluster)
+        clusters[cid] = members
+        cluster_members_count += len(members)
+        for n in members:
+            records[n]["cluster"] = cid
+
     data_doc = {
         "version": 1,
         "count": len(records),
@@ -318,6 +351,10 @@ def main():
         # simd-data.json is enough for consumers (e.g. the simd.dev landing
         # page's search) that want both records *and* alias resolution.
         "ambiguous": ambiguous_aliases,
+        # Variant clusters: cluster id -> sorted list of names sharing the
+        # same upstream pseudocode. Records reference their cluster via a
+        # `cluster` field; presentation layers look up siblings here.
+        "clusters": clusters,
     }
 
     (DIST / "simd-names.json").write_text(
@@ -337,6 +374,7 @@ def main():
     # tiny per-source breakdown
     by_source = Counter(r["source"] for r in by_canonical.values())
     print(f"  intrinsics by source: {dict(by_source)}")
+    print(f"  variant clusters: {len(clusters):,} clusters cover {cluster_members_count:,} records")
 
 
 if __name__ == "__main__":

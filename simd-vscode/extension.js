@@ -19,6 +19,7 @@ const path = require('path');
 const WORD_PATTERN = /[A-Za-z_][A-Za-z0-9_]*/;
 
 let recordsCache = null;
+let clustersCache = null;
 let dataPromise = null;
 let dataMissingWarned = false;
 
@@ -33,6 +34,7 @@ function ensureRecords() {
             try {
                 const doc = JSON.parse(txt);
                 recordsCache = doc.records || doc;
+                clustersCache = doc.clusters || {};
                 resolve(recordsCache);
             } catch (e) { reject(e); }
         });
@@ -110,6 +112,17 @@ function formatHover(name, rec, config) {
     if (rec.pseudocode && pcMode !== 'off') {
         md.appendMarkdown('\n**pseudocode:**\n');
         md.appendCodeblock(rec.pseudocode);
+    }
+
+    // Variants: other intrinsics with the same upstream pseudocode.
+    if (rec.cluster && clustersCache && clustersCache[rec.cluster]) {
+        const siblings = clustersCache[rec.cluster].filter(n => n !== name);
+        if (siblings.length > 0) {
+            const MAX = 8;
+            const shown = siblings.slice(0, MAX).map(n => '`' + n + '`').join(', ');
+            const more = siblings.length > MAX ? ` _+${siblings.length - MAX} more_` : '';
+            md.appendMarkdown(`\n**variants (${siblings.length}):** ${shown}${more}\n`);
+        }
     }
 
     // Footer links: upstream docs + Compiler Explorer.

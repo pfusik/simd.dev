@@ -67,6 +67,7 @@
   let typeSet = null;            // Set<string> -- subset of names that are SIMD types
   let ambiguous = null;          // {alias: [canonical, ...]}
   let records = null;            // {name: record} -- lazy
+  let clusters = null;           // {cluster_id: [name, ...]} -- variant groups
   let dataPromise = null;        // Promise<records> in flight
   let activeTooltip = null;
   let activeTarget = null;       // current trigger element (or virtual key)
@@ -557,6 +558,31 @@
     document.body.appendChild(tip);
     tip.addEventListener('mouseenter', () => { if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; } });
     tip.addEventListener('mouseleave', scheduleHide);
+    // Tab toggles inside the tooltip: click any header to open its body
+    // (closing the others). Click the active header again to close.
+    tip.addEventListener('click', (ev) => {
+      const btn = ev.target.closest('button.simd-tt-tab[data-tab]');
+      if (!btn || !tip.contains(btn)) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      const id = btn.dataset.tab;
+      const wasActive = btn.getAttribute('aria-expanded') === 'true';
+      for (const b of tip.querySelectorAll('button.simd-tt-tab')) {
+        b.setAttribute('aria-expanded', 'false');
+      }
+      for (const body of tip.querySelectorAll('.simd-tt-tab-body')) {
+        body.hidden = true;
+      }
+      if (!wasActive) {
+        btn.setAttribute('aria-expanded', 'true');
+        const body = tip.querySelector('.simd-tt-tab-body[data-body="' + id + '"]');
+        if (body) body.hidden = false;
+      }
+      // Reposition since the tooltip's height likely changed.
+      if (activeTarget && activeTarget.getBoundingClientRect) {
+        positionAtRect(tip, activeTarget.getBoundingClientRect());
+      }
+    });
     activeTooltip = tip;
     return tip;
   }
@@ -826,16 +852,47 @@
         ${link}`;
     }
 
-    let pseudocode = '';
+    // Pseudocode + variants live in a single tab row. Headers stay inline;
+    // only one body is open at a time (mutual exclusion). Click handler is
+    // delegated on the tooltip element in ensureTooltip().
+    const tabs = [];
     if (rec.pseudocode && cfg.pseudocode !== 'off') {
-      const open = cfg.pseudocode === 'expanded' ? ' open' : '';
-      pseudocode = `<details class="simd-tt-pc"${open}><summary>pseudocode</summary><pre>${escapeHtml(rec.pseudocode)}</pre></details>`;
+      tabs.push({
+        id: 'pc',
+        label: 'pseudocode',
+        body: `<pre class="simd-tt-pc-body">${escapeHtml(rec.pseudocode)}</pre>`,
+      });
+    }
+    let variantList = null;
+    if (rec.cluster && clusters && clusters[rec.cluster]) {
+      const siblings = clusters[rec.cluster].filter(n => n !== name);
+      if (siblings.length > 0) variantList = siblings;
+    }
+    if (variantList) {
+      const chips = variantList.map(n => `<code>${escapeHtml(n)}</code>`).join(' ');
+      tabs.push({
+        id: 'vars',
+        label: variantList.length + ' variants',
+        body: `<div class="simd-tt-vars-list">${chips}</div>`,
+      });
+    }
+    let togglesRow = '';
+    if (tabs.length) {
+      // Default open: pseudocode if cfg.pseudocode === 'expanded', else none.
+      const defaultOpen = (cfg.pseudocode === 'expanded' && tabs.some(t => t.id === 'pc')) ? 'pc' : null;
+      const headers = tabs.map(t =>
+        `<button type="button" class="simd-tt-tab" data-tab="${t.id}" aria-expanded="${t.id === defaultOpen}">${t.label}</button>`
+      ).join('');
+      const bodies = tabs.map(t =>
+        `<div class="simd-tt-tab-body" data-body="${t.id}"${t.id === defaultOpen ? '' : ' hidden'}>${t.body}</div>`
+      ).join('');
+      togglesRow = `<div class="simd-tt-toggles">${headers}${bodies}</div>`;
     }
 
     return `<div class="simd-tt-head"><code>${escapeHtml(name)}</code> ${families} ${archs}</div>
       <pre class="simd-tt-sig">${escapeHtml(rec.definition || '')}</pre>
       ${desc}
-      ${pseudocode}
+      ${togglesRow}
       ${link}`;
   }
 
@@ -847,6 +904,7 @@
     if (dataPromise) return dataPromise;
     dataPromise = fetchJSON(cfg.dataUrl).then(doc => {
       records = doc.records || doc;
+      clusters = doc.clusters || {};
       return records;
     });
     return dataPromise;
@@ -959,32 +1017,49 @@
     .simd-tt-foot a:hover { text-decoration: underline; }
     .simd-tt-loading { color: #888; }
     .simd-tt-error { color: #ff7b7b; }
-    /* Upstream pseudocode: collapsed by default to keep the tooltip compact;
-       expandable for power readers. The default <summary> disclosure marker
-       has to be removed three different ways to cover all evergreen browsers
-       (Chrome/Safari/Firefox) -- otherwise users get a bullet/dot leaking
-       through alongside our custom triangle. */
-    .simd-tt-pc { margin-top: 6px; }
-    .simd-tt-pc > summary {
-      display: block;                /* Firefox: needed before list-style applies */
-      cursor: pointer;
+
+    /* Tab interface: pseudocode + variants share one row of header buttons;
+       at most one body is open at a time (mutual exclusion handled by JS).
+       Each header is a button; bodies have flex-basis 100% so they take
+       the full row underneath when shown. */
+    .simd-tt-toggles {
+      margin-top: 6px;
+      display: flex;
+      flex-wrap: wrap;
+      column-gap: 1.4em;
+      row-gap: 4px;
+      align-items: flex-start;
       font-size: 11.5px;
+    }
+    .simd-tt-tab {
+      flex: 0 0 auto;
+      font: inherit;
+      background: none;
+      border: none;
+      padding: 0;
+      cursor: pointer;
       color: #8fb6ff;
       user-select: none;
-      list-style: none;              /* Chrome */
     }
-    .simd-tt-pc > summary::-webkit-details-marker { display: none; } /* Safari */
-    .simd-tt-pc > summary::marker { content: ''; }                   /* Firefox */
-    .simd-tt-pc > summary::before {
+    .simd-tt-tab:hover, .simd-tt-tab:focus-visible {
+      outline: none;
+      text-decoration: underline;
+    }
+    .simd-tt-tab::before {
       content: '▶';
       display: inline-block;
       width: 14px;
       color: #8fb6ff;
       font-size: 11px;
-      transform: translateY(-1px);  /* nudge to optical baseline */
+      transform: translateY(-1px);
     }
-    .simd-tt-pc[open] > summary::before { content: '▼'; }
-    .simd-tt-pc > pre {
+    .simd-tt-tab[aria-expanded="true"]::before { content: '▼'; }
+    .simd-tt-tab-body {
+      flex: 1 1 100%;
+      min-width: 0;
+    }
+    .simd-tt-tab-body[hidden] { display: none; }
+    .simd-tt-pc-body {
       margin: 4px 0 0 0;
       padding: 6px 8px;
       max-height: 280px;
@@ -996,6 +1071,23 @@
       font-size: 11.5px;
       line-height: 1.4;
     }
+    .simd-tt-vars-list {
+      margin-top: 4px;
+      max-height: 240px;
+      overflow-y: auto;
+      line-height: 1.7;
+    }
+    .simd-tt-vars-list code {
+      display: inline-block;
+      margin: 0 3px 2px 0;
+      padding: 1px 7px;
+      background: #2a3245;
+      color: #d8dde7;
+      border-radius: 3px;
+      font-size: 11px;
+    }
+    /* Old standalone pseudocode rules superseded by .simd-tt-toggles above;
+       leaving a small set for backcompat in case anything still uses them. */
     .simd-hint {
       position: absolute;
       display: none;

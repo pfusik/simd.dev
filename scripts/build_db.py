@@ -36,6 +36,7 @@ ARM ACLE encodes overload variance with bracketed segments in the name:
   - "svadd[_s32]_z"         -> svadd_s32_z (canonical), svadd_z (overloaded alias)
 """
 
+import hashlib
 import json
 import os
 import re
@@ -49,6 +50,36 @@ CACHE = ROOT / "cache"
 DATA = ROOT / "data"
 
 DESC_MAX_LEN = 280  # tooltip-friendly cap
+
+
+# Strings ARM/Intel use as placeholders when no real pseudocode is
+# available. We must not cluster these as if they were a real shared
+# operation (would group ~800 unrelated intrinsics under one "cluster").
+_PSEUDOCODE_PLACEHOLDERS = {
+    "no operation information.",
+    "no operation information",
+}
+
+
+def pseudocode_hash(pc: str) -> str:
+    """Stable cluster key for an intrinsic's upstream pseudocode.
+
+    ARM ASL is heavily abstract (uses `Elem[...]`, `esize`, `elements`)
+    so type/width variants of the same operation share an identical
+    pseudocode string and naturally land in the same cluster. Intel's
+    `<operation>` mentions specific bit widths, so the same hash only
+    catches Intel siblings that share a width (e.g. mask-/unmasked
+    pairs); cross-width Intel clustering would need a normalization
+    pass and is left for the LLM-cluster idea in IDEAS.md.
+
+    A short SHA1 prefix is plenty for ~22k records.
+    """
+    if not pc:
+        return ""
+    cleaned = pc.strip()
+    if cleaned.lower() in _PSEUDOCODE_PLACEHOLDERS:
+        return ""
+    return hashlib.sha1(cleaned.encode("utf-8")).hexdigest()[:12]
 
 
 def shorten(text: str, limit: int = DESC_MAX_LEN) -> str:
@@ -171,6 +202,7 @@ def arm_records():
             "description": desc,
             "desc_source": "arm-acle" if desc else "",
             "pseudocode": pseudocode,
+            "pseudocode_hash": pseudocode_hash(pseudocode),
             "source": "arm-acle",
         }
 
@@ -268,6 +300,7 @@ def intel_records():
             "description": desc,
             "desc_source": desc_source,
             "pseudocode": pseudocode,
+            "pseudocode_hash": pseudocode_hash(pseudocode),
             "source": "intel-iguide",
         }
 

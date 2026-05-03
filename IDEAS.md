@@ -27,6 +27,7 @@ Each entry should explain *why* before *what*.
 - [Search / lookup endpoint](#search--lookup-endpoint)
 
 **[Done](#done)**
+- [Variant detection via pseudocode hash](#variant-detection-via-pseudocode-hash)
 - [VS Code extension (v0)](#vs-code-extension-v0)
 - [Compiler Explorer URL per intrinsic](#compiler-explorer-url-per-intrinsic)
 
@@ -45,9 +46,25 @@ Hand-writing 22k of these doesn't scale; pure-script transformers cover
 predication, FP rounding, SVE scalable lengths, AES/SHA fixed transforms).
 
 **Sketch:**
-- Build prompt context per intrinsic: signature + description + upstream
-  pseudocode (now in the cache via `cache/arm_operations.json`).
-- LLM produces `{formula, plain_english, example_inputs, example_outputs}`.
+- **Cluster first, prompt once per cluster.** Most of the 22k catalog is
+  type/width variants of the same operation. Group records by *normalized
+  upstream pseudocode* (not by name — names lie: `_mm_add` vs `_mm_adds`
+  vs `_mm_hadd` vs `_mm_mask_add` are very different operations under
+  similar prefixes). ARM's ASL is already type-generic so plain-hash
+  clustering gives huge groups out of the box (`vadd_s8/s16/s32/s64/u8/...`
+  all share one pseudocode); Intel's needs normalization (replace lane
+  widths and counts with placeholders before hashing) to cluster across
+  widths. After normalization, expect **~3,000-5,000 unique clusters
+  from 22,111 records** — 4-7× LLM cost reduction and stronger internal
+  consistency (every member of a cluster lands on the same template).
+  Phase 1 of this is already shipped — see "Variant detection via
+  pseudocode hash" in the Done section.
+- Build prompt context per cluster: representative signature + description
+  + upstream pseudocode + the list of cluster members (so the LLM knows
+  the variation axes — lane width, signed/unsigned, masked/unmasked).
+- LLM produces `{formula_template, plain_english_template,
+  example_inputs_per_member, example_outputs_per_member}`. Templates have
+  placeholders (`{lanes}`, `{type}`, `{bits}`) filled at render time.
 - Pinned model + temperature 0; cache outputs by content-hash
   (`data/llm-cache/<hash>.json`).
 - Commit the cached outputs to the repo so rebuild is reproducible *up to*
@@ -57,8 +74,14 @@ predication, FP rounding, SVE scalable lengths, AES/SHA fixed transforms).
   shape on 17 intrinsics across the complexity spectrum.
 
 **Caveats:**
-- ~$50-100 in tokens for a frontier-model batch on the full catalog.
+- ~$15-25 in tokens for a frontier-model batch *with clustering* (vs.
+  ~$50-100 without). Bigger savings for ARM where clusters tend to be
+  larger.
 - Hallucination risk on the long tail. Mitigated by the verifier (next).
+- Within-cluster outliers exist (saturating arithmetic, FP rounding modes,
+  predicated forms). Cluster members where the pseudocode normalizer
+  can't justify the merge should fall out of the cluster. Manual review
+  of a sample of cluster representatives catches the rest.
 
 ## Verifier interpreter for upstream pseudocode
 
@@ -238,6 +261,43 @@ index is already small enough to ship to every page; with a fuzzy match
 counterpart to hover detection.
 
 # Done
+
+## Variant detection via pseudocode hash
+
+**Why:** the catalog is full of type/width siblings of the same operation
+(`vadd_s8`, `vadd_s16`, … 36 in one cluster; `_mm_add_epi32` and
+`_mm_add_ps` share an identical bitwise pseudocode; etc.). Showing
+those siblings inline in the tooltip lets a reader pivot from "the i32
+add" to "the f32 add" without losing context, and is a stepping stone
+toward the LLM-cluster idea above (the same hash key tells the LLM
+pass which intrinsics share an explanation template).
+
+**Shipped:** every record now gets a `cluster` id derived from a SHA1
+prefix of its upstream pseudocode (after stripping placeholders like
+ARM's "No operation information."). Records that share a hash share a
+cluster. simd-data.json carries a `clusters` map of `cluster_id →
+[member names]`. Numbers from the current build:
+
+- 22,111 records → **2,563 clusters covering 11,562 records** (avg ~5
+  members per cluster, p90 ~8, max 795 → 664 → 144).
+- The web tooltip, the simd.dev result card, and the simd-vscode hover
+  each render a "variants (N): …" section under the pseudocode block,
+  capped to 8 visible names with a "+N more" indicator. On the simd.dev
+  card the variant chips are clickable and load the sibling's card.
+- Wire-size impact: +45 KB gzipped on `simd-data.json` (including the
+  cluster map + per-record cluster id).
+
+**Known limits (future work, see "Plain-formula explanation per
+intrinsic" in Considered):**
+- ARM ASL is type-generic so its clusters are large and clean. Intel's
+  `<operation>` mentions specific bit widths, so cross-width Intel
+  clustering would require a normalization pass (replace `8/16/32/64`
+  with placeholders before hashing). Not done; clusters are smaller for
+  Intel as a result.
+- Some clusters group operations that *look* the same at the bit level
+  but differ in type interpretation (e.g. `_mm_add_epi32` and
+  `_mm_add_ps` share an identical bitwise pseudocode). Acceptable for
+  v0 — the user still sees the relationship.
 
 ## VS Code extension (v0)
 

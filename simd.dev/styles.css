@@ -304,6 +304,19 @@ p { margin: 0 0 0.9rem; }
 }
 .tag.kind { background: var(--warm-pill-bg); color: var(--warm-pill); }
 .tag.arch { background: #ede0f3; color: #6a3c80; }
+/* Family / arch tags are clickable buttons that toggle the filter chip
+   row above. The "type" badge (rec.kind === 'type') stays a static span. */
+button.tag-filter {
+    font: inherit;
+    border: none;
+    cursor: pointer;
+    transition: filter 0.08s, box-shadow 0.08s;
+}
+button.tag-filter:hover, button.tag-filter:focus-visible {
+    filter: brightness(0.92);
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(74,122,254,0.22);
+}
 .card .signature {
     margin-bottom: 0.6rem;
 }
@@ -311,23 +324,48 @@ p { margin: 0 0 0.9rem; }
     margin-bottom: 0.6rem;
     color: #2d3340;
 }
-.card .pseudocode-toggle {
-    display: block;
+/* Tab interface for pseudocode / variants / (later: semantics).
+   Headers stay inline on one row; only one body is shown at a time
+   (mutual exclusion handled by the click handler in app.js). Clicking
+   the active header collapses everything. */
+.card-toggles {
+    margin-top: 0.6rem;
+    display: flex;
+    flex-wrap: wrap;
+    column-gap: 1.4em;
+    row-gap: 0.3rem;
+    align-items: flex-start;
+    font-size: 0.92em;
+}
+.card-tab {
+    flex: 0 0 auto;
+    font: inherit;
+    background: none;
+    border: none;
+    padding: 0;
     cursor: pointer;
     color: var(--accent);
-    font-size: 0.92em;
     user-select: none;
-    margin-bottom: 0.3rem;
 }
-.card .pseudocode-toggle::before {
+.card-tab:hover, .card-tab:focus-visible {
+    text-decoration: underline;
+    outline: none;
+}
+.card-tab::before {
     content: '▶';
     display: inline-block;
     width: 14px;
     color: var(--accent);
     font-size: 11px;
 }
-.card details[open] .pseudocode-toggle::before { content: '▼'; }
-.card details > pre {
+.card-tab[aria-expanded="true"]::before { content: '▼'; }
+.card-tab-body {
+    flex: 1 1 100%;
+    min-width: 0;
+}
+.card-tab-body[hidden] { display: none; }
+.card-pc-body {
+    margin: 4px 0 0 0;
     max-height: 320px;
     overflow: auto;
     font-size: 0.88em;
@@ -336,6 +374,29 @@ p { margin: 0 0 0.9rem; }
        wraps long lines at word boundaries -- avoids the "single horizontal
        scroll line" failure mode. */
     white-space: pre-wrap;
+}
+.variants-list {
+    margin-top: 4px;
+    max-height: 320px;
+    overflow-y: auto;
+    line-height: 1.8;
+}
+.variants-list .variant {
+    font: inherit;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.88em;
+    padding: 1px 7px;
+    margin: 0 3px 2px 0;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    background: white;
+    color: var(--accent);
+    cursor: pointer;
+}
+.variants-list .variant:hover, .variants-list .variant:focus {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+    outline: none;
 }
 .card .upstream-link {
     display: inline-block;

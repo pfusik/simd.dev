@@ -36,6 +36,7 @@
     let typeSet  = null;       // Set<string> of names where kind === 'type'
     let records  = null;       // {name: rec}
     let ambiguous = null;      // {alias: [canonical, ...]}
+    let clusters = null;       // {cluster_id: [name, ...]} -- variant groups
 
     init().catch(err => {
         $status.textContent = 'failed to load database';
@@ -45,8 +46,9 @@
     async function init() {
         $status.textContent = 'loading…';
         const doc = await fetchJSON(DATA_URL);
-        records   = doc.records || {};
+        records   = doc.records   || {};
         ambiguous = doc.ambiguous || {};
+        clusters  = doc.clusters  || {};
 
         // Names = canonicals (records keys) ∪ ambiguous aliases.
         const set = new Set(Object.keys(records));
@@ -62,6 +64,32 @@
         $q.addEventListener('input', onInput);
         $q.addEventListener('keydown', onKeydown);
         $results.addEventListener('click', onResultsClick);
+        // Card click delegate: tab headers (open one body, close others),
+        // variant chips (load that sibling's card), and family/arch tag
+        // chips (toggle the corresponding filter).
+        $card.addEventListener('click', (ev) => {
+            const tab = ev.target.closest('button.card-tab[data-tab]');
+            if (tab) {
+                const id = tab.dataset.tab;
+                const wasActive = tab.getAttribute('aria-expanded') === 'true';
+                for (const t of $card.querySelectorAll('button.card-tab')) {
+                    t.setAttribute('aria-expanded', 'false');
+                }
+                for (const b of $card.querySelectorAll('.card-tab-body')) {
+                    b.hidden = true;
+                }
+                if (!wasActive) {
+                    tab.setAttribute('aria-expanded', 'true');
+                    const body = $card.querySelector('.card-tab-body[data-body="' + id + '"]');
+                    if (body) body.hidden = false;
+                }
+                return;
+            }
+            const variant = ev.target.closest('button.variant[data-name]');
+            if (variant) { showCard(variant.dataset.name); return; }
+            const filterTag = ev.target.closest('button.tag-filter[data-field]');
+            if (filterTag) toggleFilter(filterTag.dataset.field, filterTag.dataset.value);
+        });
 
         const $home = document.getElementById('home-link');
         if ($home) $home.addEventListener('click', (ev) => {
@@ -278,14 +306,42 @@
     }
 
     function renderCardHTML(name, rec) {
+        // Tags: family + arch tags are clickable buttons that toggle the
+        // corresponding filter chip. The "type" badge stays static.
         const tags = [];
         if (rec.kind === 'type') tags.push(`<span class="tag kind">type</span>`);
-        for (const f of rec.family || []) tags.push(`<span class="tag">${escapeHtml(f)}</span>`);
-        for (const a of rec.arch   || []) tags.push(`<span class="tag arch">${escapeHtml(a)}</span>`);
+        for (const f of rec.family || []) {
+            const filterValue = (f === 'SME and SME2' ? 'SME' : f).toLowerCase();
+            tags.push(`<button type="button" class="tag tag-filter" data-field="family" data-value="${escapeAttr(filterValue)}" title="filter family:${escapeAttr(filterValue)}">${escapeHtml(f)}</button>`);
+        }
+        for (const a of rec.arch || []) {
+            tags.push(`<button type="button" class="tag tag-filter arch" data-field="arch" data-value="${escapeAttr(a.toLowerCase())}" title="filter arch:${escapeAttr(a)}">${escapeHtml(a)}</button>`);
+        }
 
-        let pseudoblock = '';
+        // Tab row: pseudocode + variants share one row of header buttons,
+        // mutually exclusive content underneath. Click handler on the card.
+        const tabs = [];
         if (rec.pseudocode) {
-            pseudoblock = `<details><summary class="pseudocode-toggle"> pseudocode</summary><pre>${escapeHtml(rec.pseudocode)}</pre></details>`;
+            tabs.push({ id: 'pc', label: 'pseudocode',
+                body: `<pre class="card-pc-body">${escapeHtml(rec.pseudocode)}</pre>` });
+        }
+        if (rec.cluster && clusters && clusters[rec.cluster]) {
+            const siblings = clusters[rec.cluster].filter(n => n !== name);
+            if (siblings.length > 0) {
+                const chips = siblings.map(n => `<button type="button" class="variant" data-name="${escapeAttr(n)}">${escapeHtml(n)}</button>`).join('');
+                tabs.push({ id: 'vars', label: siblings.length + ' variants',
+                    body: `<div class="variants-list">${chips}</div>` });
+            }
+        }
+        let togglesRow = '';
+        if (tabs.length) {
+            const headers = tabs.map(t =>
+                `<button type="button" class="card-tab" data-tab="${t.id}" aria-expanded="false">${t.label}</button>`
+            ).join('');
+            const bodies = tabs.map(t =>
+                `<div class="card-tab-body" data-body="${t.id}" hidden>${t.body}</div>`
+            ).join('');
+            togglesRow = `<div class="card-toggles">${headers}${bodies}</div>`;
         }
 
         const linkLabel = rec.source === 'arm-acle' ? 'Arm developer docs →' : 'Intel Intrinsics Guide →';
@@ -298,6 +354,7 @@
         const link = links.length ? `<div class="upstream-links">${links.join(' &middot; ')}</div>` : '';
 
         const desc = rec.description ? `<div class="description">${escapeHtml(rec.description)}</div>` : '';
+
         return `
             <div class="card-head">
                 <span class="name">${escapeHtml(name)}</span>
@@ -305,7 +362,7 @@
             </div>
             <pre class="signature">${escapeHtml(rec.definition || '')}</pre>
             ${desc}
-            ${pseudoblock}
+            ${togglesRow}
             ${link}
         `;
     }
