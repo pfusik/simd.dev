@@ -51,7 +51,7 @@ Related projects:
   — the reference everyone uses for browsing, with rich descriptions and
   pseudocode. Our DB pulls signatures, ISA flags, and pseudocode
   from the same XML it's built on.
-- **[simd.info](simd.info)** — seems to be a very rich and deep database with a different
+- **[simd.info](https://simd.info)** — seems to be a very rich and deep database with a different
   focus (reference reading rather than tooltip embedding). Not open.
 - **[Highway](https://github.com/google/highway)** (Google's portable SIMD
   library) has writeups under [`g3doc/`](https://github.com/google/highway/tree/master/g3doc)
