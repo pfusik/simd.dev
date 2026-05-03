@@ -37,6 +37,7 @@ By default the library:
 <script src=".../simd-tooltips.js"
         data-on="hover+?"            <!-- 'hover' (default) | 'click' | 'hover+?' -->
         data-wrap                    <!-- opt into walk + wrap-in-span mode -->
+        data-pseudocode="expanded"   <!-- 'collapsed' (default) | 'expanded' | 'off' -->
         data-scope="article.docs"    <!-- restrict wrap mode to a subtree -->
         data-base-url="/static/simd/" <!-- if JSON sits elsewhere -->
         defer></script>
@@ -56,6 +57,13 @@ Walks the page once at init and wraps every intrinsic in
 underline as a "this is hoverable" cue and makes intrinsics tabbable for
 keyboard a11y. Use it when you want those affordances on a static page;
 skip it for SPAs and pages where you'd rather not touch markup.
+
+### Pseudocode in tooltips (`data-pseudocode`)
+
+- `collapsed` (default) — pseudocode is in the tooltip behind a `▸ pseudocode`
+  expander; readers click to reveal.
+- `expanded` — pseudocode is shown unfolded by default.
+- `off` — pseudocode is not rendered at all (the tooltip stays compact).
 
 ## Programmatic init
 

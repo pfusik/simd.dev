@@ -32,12 +32,18 @@ Open `out.html` in a browser, *air-gapped if you like*. Tooltips work.
 ## Options
 
 ```
-simd-annotate INPUT [-o OUTPUT] [--on TRIGGER] [--wrap] [--data DIR]
+simd-annotate INPUT [-o OUTPUT] [--on TRIGGER] [--wrap]
+              [--pseudocode collapsed|expanded|off]
+              [--data DIR] [--quiet]
 
   INPUT              HTML file (or '-' for stdin)
   -o, --output       output file (default: stdout)
   --on TRIGGER       'hover' (default) | 'click' | 'hover+?'
   --wrap             walk-and-wrap mode (visible underline + Tab focus)
+  --pseudocode       upstream pseudocode in tooltips:
+                     'collapsed' (default), 'expanded', or 'off'.
+                     'off' also strips the pseudocode field from the
+                     embedded data so the output is smaller.
   --data DIR         simd-tooltip/dist/ location
                      (default: ../simd-tooltip/dist relative to this script)
   --quiet            suppress the stderr summary line

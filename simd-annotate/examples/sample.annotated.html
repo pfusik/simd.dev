@@ -121,6 +121,7 @@ void saxpy_sve(float a, const float *x, const float *y, float *out, size_t n) {
     scope: 'body',
     on: 'hover',         // 'hover' | 'click' | 'hover+?'  (lazy only for 'hover+?')
     wrap: false,         // false = lazy hover detection, true = walk and wrap
+    pseudocode: 'collapsed', // 'collapsed' (default) | 'expanded' | 'off'
     baseUrl: scriptDir(),
     namesUrl: null,      // defaults to baseUrl + 'simd-names.json'
     dataUrl: null,       // defaults to baseUrl + 'simd-data.json'
@@ -217,10 +218,12 @@ void saxpy_sve(float a, const float *x, const float *y, float *out, size_t n) {
     if (cfg.wrap) {
       if (cfg.on === 'click') {
         listen(document, 'click', onWrapClick, true);
-        // No focus listeners in click mode -- a mousedown on a tabIndex-0
-        // span fires focus before click, which would briefly show the tooltip
-        // and then the click would toggle it off again. Keyboard users still
-        // get coverage via the Enter/Space handler in onKeydown.
+        // Focus handling in click mode: only react to *keyboard* focus
+        // (Tab arrival), not the mousedown-induced focus that would
+        // otherwise fire before the click and toggle the tooltip off.
+        // We gate on :focus-visible inside onWrapKbFocusIn.
+        listen(document, 'focusin', onWrapKbFocusIn, true);
+        listen(document, 'focusout', onWrapLeave, true);
       } else {
         listen(document, 'mouseover', onWrapEnter, true);
         listen(document, 'mouseout', onWrapLeave, true);
@@ -512,6 +515,19 @@ void saxpy_sve(float a, const float *x, const float *y, float *out, size_t n) {
     showAtRect(el.dataset.name, el.getBoundingClientRect());
   }
 
+  function onWrapKbFocusIn(ev) {
+    // Click-mode focus listener: only react if focus came from the keyboard
+    // (Tab navigation), not from a mousedown. :focus-visible matches when the
+    // browser thinks a focus indicator should be shown -- which, by spec,
+    // means keyboard or programmatic focus, not mouse focus.
+    const el = closestWrapped(ev.target);
+    if (!el) return;
+    let kb = false;
+    try { kb = !!(el.matches && el.matches(':focus-visible')); } catch (_) { kb = false; }
+    if (!kb) return;
+    onWrapEnter(ev);
+  }
+
   function onWrapLeave(ev) {
     const fromEl = closestWrapped(ev.target);
     if (!fromEl) return;
@@ -522,6 +538,9 @@ void saxpy_sve(float a, const float *x, const float *y, float *out, size_t n) {
   }
 
   function onWrapClick(ev) {
+    // Clicks inside the open tooltip should pass through so the user can
+    // toggle the <details> pseudocode block, click the docs link, etc.
+    if (activeTooltip && activeTooltip.contains(ev.target)) return;
     const el = closestWrapped(ev.target);
     if (!el) { hide(); return; }
     ev.preventDefault();
@@ -698,9 +717,11 @@ void saxpy_sve(float a, const float *x, const float *y, float *out, size_t n) {
         ${link}`;
     }
 
-    const pseudocode = rec.pseudocode
-      ? `<details class="simd-tt-pc"><summary>pseudocode<\/summary><pre>${escapeHtml(rec.pseudocode)}<\/pre><\/details>`
-      : '';
+    let pseudocode = '';
+    if (rec.pseudocode && cfg.pseudocode !== 'off') {
+      const open = cfg.pseudocode === 'expanded' ? ' open' : '';
+      pseudocode = `<details class="simd-tt-pc"${open}><summary>pseudocode<\/summary><pre>${escapeHtml(rec.pseudocode)}<\/pre><\/details>`;
+    }
 
     return `<div class="simd-tt-head"><code>${escapeHtml(name)}<\/code> ${families} ${archs}<\/div>
       <pre class="simd-tt-sig">${escapeHtml(rec.definition || '')}<\/pre>
@@ -777,11 +798,11 @@ void saxpy_sve(float a, const float *x, const float *y, float *out, size_t n) {
       border-bottom: 1px dashed currentColor;
     }
     /* SIMD types: visually distinct from intrinsics, and excluded from the
-       Tab order (no tabindex set in the wrapper). Use a thinner dotted
+       Tab order (no tabindex set in the wrapper). Use a heavier dotted
        underline in an amber tone -- mirrors the type tag in the tooltip. */
     .simd-intrinsic.simd-type {
       cursor: help;
-      border-bottom: 1px dotted #d09a3a;
+      border-bottom: 2px dotted #d09a3a;
     }
     /* Show the focus indicator on any focus -- click *and* keyboard tab --
        so the user can see which intrinsic is currently the active target. */
@@ -830,22 +851,30 @@ void saxpy_sve(float a, const float *x, const float *y, float *out, size_t n) {
     .simd-tt-loading { color: #888; }
     .simd-tt-error { color: #ff7b7b; }
     /* Upstream pseudocode: collapsed by default to keep the tooltip compact;
-       expandable for power readers. */
+       expandable for power readers. The default <summary> disclosure marker
+       has to be removed three different ways to cover all evergreen browsers
+       (Chrome/Safari/Firefox) -- otherwise users get a bullet/dot leaking
+       through alongside our custom triangle. */
     .simd-tt-pc { margin-top: 6px; }
     .simd-tt-pc > summary {
+      display: block;                /* Firefox: needed before list-style applies */
       cursor: pointer;
       font-size: 11.5px;
       color: #8fb6ff;
-      list-style: none;
       user-select: none;
+      list-style: none;              /* Chrome */
     }
-    .simd-tt-pc > summary::-webkit-details-marker { display: none; }
+    .simd-tt-pc > summary::-webkit-details-marker { display: none; } /* Safari */
+    .simd-tt-pc > summary::marker { content: ''; }                   /* Firefox */
     .simd-tt-pc > summary::before {
-      content: '▸ ';
+      content: '▶';
+      display: inline-block;
+      width: 14px;
       color: #8fb6ff;
-      font-size: 10px;
+      font-size: 11px;
+      transform: translateY(-1px);  /* nudge to optical baseline */
     }
-    .simd-tt-pc[open] > summary::before { content: '▾ '; }
+    .simd-tt-pc[open] > summary::before { content: '▼'; }
     .simd-tt-pc > pre {
       margin: 4px 0 0 0;
       padding: 6px 8px;
@@ -896,6 +925,7 @@ void saxpy_sve(float a, const float *x, const float *y, float *out, size_t n) {
     const opts = {};
     if (s.dataset.scope) opts.scope = s.dataset.scope;
     if (s.dataset.on) opts.on = s.dataset.on;
+    if (s.dataset.pseudocode) opts.pseudocode = s.dataset.pseudocode;
     if (s.hasAttribute('data-wrap')) opts.wrap = true;
     if (s.dataset.baseUrl) opts.baseUrl = s.dataset.baseUrl;
     if (s.dataset.namesUrl) opts.namesUrl = s.dataset.namesUrl;
@@ -919,7 +949,7 @@ void saxpy_sve(float a, const float *x, const float *y, float *out, size_t n) {
   if (!window.SimdTooltips) return;
   var names = {"version":1,"count":20,"names":["__m256","_mm256_add_ps","_mm256_fmadd_ps","_mm256_loadu_ps","_mm256_mul_ps","_mm256_set1_ps","_mm256_storeu_ps","float32x4_t","svbool_t","svcntw","svdup_n_f32","svfloat32_t","svld1_f32","svmla_f32_m","svst1_f32","svwhilelt_b32","vdupq_n_f32","vfmaq_f32","vld1q_f32","vst1q_f32"],"types":["__m256","float32x4_t","svbool_t","svfloat32_t"],"ambiguous":{"svwhilelt_b32":["svwhilelt_b32_s32","svwhilelt_b32_s64","svwhilelt_b32_u32","svwhilelt_b32_u64"]}};
   var data  = {"version":1,"count":19,"records":{"__m256":{"name":"__m256","kind":"type","arch":["x86_64"],"family":["AVX / AVX2"],"definition":"typedef __m256;   // 256-bit single-precision float vector","description":"256-bit packed single-precision float vector.","source":"synth","doc_url":""},"_mm256_add_ps":{"name":"_mm256_add_ps","arch":["x86_64"],"family":["AVX"],"definition":"__m256 _mm256_add_ps(__m256 a, __m256 b)","description":"Add packed single-precision (32-bit) floating-point elements in \"a\" and \"b\", and store the results in \"dst\".","pseudocode":"FOR j := 0 to 7\n\ti := j*32\n\tdst[i+31:i] := a[i+31:i] + b[i+31:i]\nENDFOR\ndst[MAX:256] := 0","source":"intel-iguide","doc_url":"https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_add_ps"},"_mm256_fmadd_ps":{"name":"_mm256_fmadd_ps","arch":["x86_64"],"family":["FMA"],"definition":"__m256 _mm256_fmadd_ps(\n    __m256 a,\n    __m256 b,\n    __m256 c)","description":"Computes a multiply-add of 256-bit vectors of [8 x float].","pseudocode":"FOR j := 0 to 7\n\ti := j*32\n\tdst[i+31:i] := (a[i+31:i] * b[i+31:i]) + c[i+31:i]\nENDFOR\ndst[MAX:256] := 0","source":"intel-iguide","doc_url":"https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_fmadd_ps"},"_mm256_loadu_ps":{"name":"_mm256_loadu_ps","arch":["x86_64"],"family":["AVX"],"definition":"__m256 _mm256_loadu_ps(float const * mem_addr)","description":"Loads 8 single-precision floating point values from an unaligned memory location pointed to by __p into a vector of [8 x float].","pseudocode":"dst[255:0] := MEM[mem_addr+255:mem_addr]\ndst[MAX:256] := 0","source":"intel-iguide","doc_url":"https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_loadu_ps"},"_mm256_mul_ps":{"name":"_mm256_mul_ps","arch":["x86_64"],"family":["AVX"],"definition":"__m256 _mm256_mul_ps(__m256 a, __m256 b)","description":"Multiply packed single-precision (32-bit) floating-point elements in \"a\" and \"b\", and store the results in \"dst\".","pseudocode":"FOR j := 0 to 7\n\ti := j*32\n\tdst[i+31:i] := a[i+31:i] * b[i+31:i]\nENDFOR\ndst[MAX:256] := 0","source":"intel-iguide","doc_url":"https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_mul_ps"},"_mm256_set1_ps":{"name":"_mm256_set1_ps","arch":["x86_64"],"family":["AVX"],"definition":"__m256 _mm256_set1_ps(float a)","description":"Constructs a 256-bit floating-point vector of [8 x float], with each of the eight single-precision floating-point vector elements set to the specified single-precision floating-point value.","pseudocode":"FOR j := 0 to 7\n\ti := j*32\n\tdst[i+31:i] := a[31:0]\nENDFOR\ndst[MAX:256] := 0","source":"intel-iguide","doc_url":"https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_set1_ps"},"_mm256_storeu_ps":{"name":"_mm256_storeu_ps","arch":["x86_64"],"family":["AVX"],"definition":"void _mm256_storeu_ps(float * mem_addr, __m256 a)","description":"Stores single-precision floating point values from a 256-bit vector of [8 x float] to an unaligned memory location pointed to by __p.","pseudocode":"MEM[mem_addr+255:mem_addr] := a[255:0]","source":"intel-iguide","doc_url":"https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_storeu_ps"},"float32x4_t":{"name":"float32x4_t","kind":"type","arch":["aarch32","aarch64"],"family":["Neon"],"definition":"typedef float32x4_t;   // 4 lanes of 32-bit floating-point (128-bit vector)","description":"4 lanes of 32-bit floating-point packed into a 128-bit vector.","source":"synth","doc_url":""},"svbool_t":{"name":"svbool_t","kind":"type","arch":["aarch64"],"family":["SVE"],"definition":"typedef svbool_t;   // SVE predicate (governing mask)","description":"SVE predicate (mask).","source":"synth","doc_url":""},"svcntw":{"name":"svcntw","arch":["aarch64"],"family":["SME and SME2","SVE"],"definition":"uint64_t svcntw(void)","description":"Count the number of 32-bit elements in a vector","pseudocode":"Return the number of 32-bit elements in a full vector.The underlying instruction takes a constant multiplier in the range [1, 16], which compilers can use to optimize multiplications of the function's return value.","source":"arm-acle","doc_url":"https://developer.arm.com/architectures/instruction-sets/intrinsics/svcntw"},"svdup_n_f32":{"name":"svdup_n_f32","arch":["aarch64"],"family":["SME and SME2","SVE"],"definition":"svfloat32_t svdup_n_f32(float32_t op)","description":"Broadcast a scalar value","pseudocode":"Return a vector in which each element i contains op.[1] This is true if the value is in the range [-128, 127] or is a multiple of 256 in the range [-32768, 32512][2] This is true if op is a floating-point immediate value expressable as ±n×2r, where n and r are integers such that 16 ≤ n ≤ 31 and -7 ≤ r ≤ 0.  In other words, this instruction requires op to have a normalized binary floating-point encoding with a sign bit, a 3-bit exponent, and a 4-bit fractional part.","source":"arm-acle","doc_url":"https://developer.arm.com/architectures/instruction-sets/intrinsics/svdup_n_f32"},"svfloat32_t":{"name":"svfloat32_t","kind":"type","arch":["aarch64"],"family":["SVE"],"definition":"typedef svfloat32_t;   // scalable vector of 32-bit floating-point","description":"Scalable vector of 32-bit floating-point.","source":"synth","doc_url":""},"svld1_f32":{"name":"svld1_f32","arch":["aarch64"],"family":["SME and SME2","SVE"],"definition":"svfloat32_t svld1_f32(svbool_t pg, const float32_t *base)","description":"Unextended load","pseudocode":"Return a vector in which each active element i contains base[i] and in which all other elements are zero.  Do not access memory for inactive elements.","source":"arm-acle","doc_url":"https://developer.arm.com/architectures/instruction-sets/intrinsics/svld1_f32"},"svmla_f32_m":{"name":"svmla_f32_m","arch":["aarch64"],"family":["SME and SME2","SVE"],"definition":"svfloat32_t svmla_f32_m(\n    svbool_t pg,\n    svfloat32_t op1,\n    svfloat32_t op2,\n    svfloat32_t op3)","description":"Multiply-add, addend first","pseudocode":"Return a vector in which each active element i contains the value:op1[i] + op2[i] * op3[i]Take the inactive elements of the result from the corresponding elements of op1.The multiplication and addition are fused, with no intermediate rounding after the multiplication.Active signaling NaNs trigger an IEEE Invalid exception but quiet NaNs do not. Multiplying an infinity by zero also triggers an IEEE Invalid exception, as does adding +∞ and -∞ together.","source":"arm-acle","doc_url":"https://developer.arm.com/architectures/instruction-sets/intrinsics/svmla_f32_m"},"svst1_f32":{"name":"svst1_f32","arch":["aarch64"],"family":["SME and SME2","SVE"],"definition":"void svst1_f32(\n    svbool_t pg,\n    float32_t *base,\n    svfloat32_t data)","description":"Non-truncating store","pseudocode":"For each active element i, store data[i] to base[i]. Do not access memory for inactive elements.","source":"arm-acle","doc_url":"https://developer.arm.com/architectures/instruction-sets/intrinsics/svst1_f32"},"vdupq_n_f32":{"name":"vdupq_n_f32","arch":["aarch32","aarch64"],"family":["Neon"],"definition":"float32x4_t vdupq_n_f32(float32_t value)","description":"Duplicate vector element to vector or scalar.","pseudocode":"CheckFPAdvSIMDEnabled64();\nbits(idxdsize) operand = V[n];\nbits(datasize) result;\nbits(esize) element;\n\nelement = Elem[operand, index, esize];\nfor e = 0 to elements-1\n    Elem[result, e, esize] = element;\nV[d] = result;","source":"arm-acle","doc_url":"https://developer.arm.com/architectures/instruction-sets/intrinsics/vdupq_n_f32"},"vfmaq_f32":{"name":"vfmaq_f32","arch":["aarch32","aarch64"],"family":["Neon"],"definition":"float32x4_t vfmaq_f32(\n    float32x4_t a,\n    float32x4_t b,\n    float32x4_t c)","description":"Floating-point fused Multiply-Add to accumulator (vector).","pseudocode":"CheckFPAdvSIMDEnabled64();\nbits(datasize) operand1 = V[n];\nbits(datasize) operand2 = V[m];\nbits(datasize) operand3 = V[d];\nbits(datasize) result;\nbits(esize) element1;\nbits(esize) element2;\n\nfor e = 0 to elements-1\n    element1 = Elem[operand1, e, esize];\n    element2 = Elem[operand2, e, esize];\n    if sub_op then element1 = FPNeg(element1);\n    Elem[result, e, esize] = FPMulAdd(Elem[operand3, e, esize], element1, element2, FPCR[]);\n\nV[d] = result;","source":"arm-acle","doc_url":"https://developer.arm.com/architectures/instruction-sets/intrinsics/vfmaq_f32"},"vld1q_f32":{"name":"vld1q_f32","arch":["aarch32","aarch64"],"family":["Neon"],"definition":"float32x4_t vld1q_f32(float32_t const * ptr)","description":"Load multiple single-element structures to one, two, three, or four registers.","pseudocode":"CheckFPAdvSIMDEnabled64();\n\nbits(64) address;\nbits(64) offs;\nbits(datasize) rval;\ninteger tt;\nconstant integer ebytes = esize DIV 8;\n\nif HaveMTE2Ext() then\n    SetTagCheckedInstruction(tag_checked);\n\nif n == 31 then\n    CheckSPAlignment();\n    address = SP[];\nelse\n    address = X[n];\n\noffs = Zeros();\nfor r = 0 to rpt-1\n    for e = 0 to elements-1\n        tt = (t + r) MOD 32;\n        for s = 0 to selem-1\n            rval = V[tt];\n            if memop == MemOp_LOAD then\n                Elem[rval, e, esize] = Mem[address + offs, ebytes, AccType_VEC];\n                V[tt] = rval;\n            else // memop == MemOp_STORE\n                Mem[address + offs, ebytes, AccType_VEC] = Elem[rval, e, esize];\n            offs = offs + ebytes;\n            tt = (tt + 1) MOD 32;\n\nif wback then\n    if m != 31 then\n        offs = X[m];\n    if n == 31 then\n        SP[] = address + offs;\n    else\n        X[n] = address + offs;","source":"arm-acle","doc_url":"https://developer.arm.com/architectures/instruction-sets/intrinsics/vld1q_f32"},"vst1q_f32":{"name":"vst1q_f32","arch":["aarch32","aarch64"],"family":["Neon"],"definition":"void vst1q_f32(float32_t * ptr, float32x4_t val)","description":"Store multiple single-element structures from one, two, three, or four registers.","pseudocode":"CheckFPAdvSIMDEnabled64();\n\nbits(64) address;\nbits(64) offs;\nbits(datasize) rval;\ninteger tt;\nconstant integer ebytes = esize DIV 8;\n\nif HaveMTE2Ext() then\n    SetTagCheckedInstruction(tag_checked);\n\nif n == 31 then\n    CheckSPAlignment();\n    address = SP[];\nelse\n    address = X[n];\n\noffs = Zeros();\nfor r = 0 to rpt-1\n    for e = 0 to elements-1\n        tt = (t + r) MOD 32;\n        for s = 0 to selem-1\n            rval = V[tt];\n            if memop == MemOp_LOAD then\n                Elem[rval, e, esize] = Mem[address + offs, ebytes, AccType_VEC];\n                V[tt] = rval;\n            else // memop == MemOp_STORE\n                Mem[address + offs, ebytes, AccType_VEC] = Elem[rval, e, esize];\n            offs = offs + ebytes;\n            tt = (tt + 1) MOD 32;\n\nif wback then\n    if m != 31 then\n        offs = X[m];\n    if n == 31 then\n        SP[] = address + offs;\n    else\n        X[n] = address + offs;","source":"arm-acle","doc_url":"https://developer.arm.com/architectures/instruction-sets/intrinsics/vst1q_f32"}}};
-  var opts  = { on: "hover+?", wrap: false, names: names, data: data };
+  var opts  = { on: "hover+?", wrap: false, pseudocode: "collapsed", names: names, data: data };
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', function () { SimdTooltips.init(opts); });
   } else {

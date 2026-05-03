@@ -47,6 +47,7 @@
     scope: 'body',
     on: 'hover',         // 'hover' | 'click' | 'hover+?'  (lazy only for 'hover+?')
     wrap: false,         // false = lazy hover detection, true = walk and wrap
+    pseudocode: 'collapsed', // 'collapsed' (default) | 'expanded' | 'off'
     baseUrl: scriptDir(),
     namesUrl: null,      // defaults to baseUrl + 'simd-names.json'
     dataUrl: null,       // defaults to baseUrl + 'simd-data.json'
@@ -143,10 +144,12 @@
     if (cfg.wrap) {
       if (cfg.on === 'click') {
         listen(document, 'click', onWrapClick, true);
-        // No focus listeners in click mode -- a mousedown on a tabIndex-0
-        // span fires focus before click, which would briefly show the tooltip
-        // and then the click would toggle it off again. Keyboard users still
-        // get coverage via the Enter/Space handler in onKeydown.
+        // Focus handling in click mode: only react to *keyboard* focus
+        // (Tab arrival), not the mousedown-induced focus that would
+        // otherwise fire before the click and toggle the tooltip off.
+        // We gate on :focus-visible inside onWrapKbFocusIn.
+        listen(document, 'focusin', onWrapKbFocusIn, true);
+        listen(document, 'focusout', onWrapLeave, true);
       } else {
         listen(document, 'mouseover', onWrapEnter, true);
         listen(document, 'mouseout', onWrapLeave, true);
@@ -438,6 +441,19 @@
     showAtRect(el.dataset.name, el.getBoundingClientRect());
   }
 
+  function onWrapKbFocusIn(ev) {
+    // Click-mode focus listener: only react if focus came from the keyboard
+    // (Tab navigation), not from a mousedown. :focus-visible matches when the
+    // browser thinks a focus indicator should be shown -- which, by spec,
+    // means keyboard or programmatic focus, not mouse focus.
+    const el = closestWrapped(ev.target);
+    if (!el) return;
+    let kb = false;
+    try { kb = !!(el.matches && el.matches(':focus-visible')); } catch (_) { kb = false; }
+    if (!kb) return;
+    onWrapEnter(ev);
+  }
+
   function onWrapLeave(ev) {
     const fromEl = closestWrapped(ev.target);
     if (!fromEl) return;
@@ -448,6 +464,9 @@
   }
 
   function onWrapClick(ev) {
+    // Clicks inside the open tooltip should pass through so the user can
+    // toggle the <details> pseudocode block, click the docs link, etc.
+    if (activeTooltip && activeTooltip.contains(ev.target)) return;
     const el = closestWrapped(ev.target);
     if (!el) { hide(); return; }
     ev.preventDefault();
@@ -624,9 +643,11 @@
         ${link}`;
     }
 
-    const pseudocode = rec.pseudocode
-      ? `<details class="simd-tt-pc"><summary>pseudocode</summary><pre>${escapeHtml(rec.pseudocode)}</pre></details>`
-      : '';
+    let pseudocode = '';
+    if (rec.pseudocode && cfg.pseudocode !== 'off') {
+      const open = cfg.pseudocode === 'expanded' ? ' open' : '';
+      pseudocode = `<details class="simd-tt-pc"${open}><summary>pseudocode</summary><pre>${escapeHtml(rec.pseudocode)}</pre></details>`;
+    }
 
     return `<div class="simd-tt-head"><code>${escapeHtml(name)}</code> ${families} ${archs}</div>
       <pre class="simd-tt-sig">${escapeHtml(rec.definition || '')}</pre>
@@ -703,11 +724,11 @@
       border-bottom: 1px dashed currentColor;
     }
     /* SIMD types: visually distinct from intrinsics, and excluded from the
-       Tab order (no tabindex set in the wrapper). Use a thinner dotted
+       Tab order (no tabindex set in the wrapper). Use a heavier dotted
        underline in an amber tone -- mirrors the type tag in the tooltip. */
     .simd-intrinsic.simd-type {
       cursor: help;
-      border-bottom: 1px dotted #d09a3a;
+      border-bottom: 2px dotted #d09a3a;
     }
     /* Show the focus indicator on any focus -- click *and* keyboard tab --
        so the user can see which intrinsic is currently the active target. */
@@ -756,22 +777,30 @@
     .simd-tt-loading { color: #888; }
     .simd-tt-error { color: #ff7b7b; }
     /* Upstream pseudocode: collapsed by default to keep the tooltip compact;
-       expandable for power readers. */
+       expandable for power readers. The default <summary> disclosure marker
+       has to be removed three different ways to cover all evergreen browsers
+       (Chrome/Safari/Firefox) -- otherwise users get a bullet/dot leaking
+       through alongside our custom triangle. */
     .simd-tt-pc { margin-top: 6px; }
     .simd-tt-pc > summary {
+      display: block;                /* Firefox: needed before list-style applies */
       cursor: pointer;
       font-size: 11.5px;
       color: #8fb6ff;
-      list-style: none;
       user-select: none;
+      list-style: none;              /* Chrome */
     }
-    .simd-tt-pc > summary::-webkit-details-marker { display: none; }
+    .simd-tt-pc > summary::-webkit-details-marker { display: none; } /* Safari */
+    .simd-tt-pc > summary::marker { content: ''; }                   /* Firefox */
     .simd-tt-pc > summary::before {
-      content: '▸ ';
+      content: '▶';
+      display: inline-block;
+      width: 14px;
       color: #8fb6ff;
-      font-size: 10px;
+      font-size: 11px;
+      transform: translateY(-1px);  /* nudge to optical baseline */
     }
-    .simd-tt-pc[open] > summary::before { content: '▾ '; }
+    .simd-tt-pc[open] > summary::before { content: '▼'; }
     .simd-tt-pc > pre {
       margin: 4px 0 0 0;
       padding: 6px 8px;
@@ -822,6 +851,7 @@
     const opts = {};
     if (s.dataset.scope) opts.scope = s.dataset.scope;
     if (s.dataset.on) opts.on = s.dataset.on;
+    if (s.dataset.pseudocode) opts.pseudocode = s.dataset.pseudocode;
     if (s.hasAttribute('data-wrap')) opts.wrap = true;
     if (s.dataset.baseUrl) opts.baseUrl = s.dataset.baseUrl;
     if (s.dataset.namesUrl) opts.namesUrl = s.dataset.namesUrl;

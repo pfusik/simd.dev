@@ -23,16 +23,26 @@
    (like <code>__m256i</code>, <code>int8x16_t</code>, <code>svfloat32_t</code>), a tooltip pops up
    with its signature and a short description.  No DOM walk, no markup mutation: the library
    detects words under the cursor on the fly using <code>caretPositionFromPoint</code>.</p>
+<p style="font-size:12px;color:#666;margin-top:-0.5rem">
+   serve this dir over <code>python3 -m http.server</code> for the demo to load its data files.
+</p>
 
 <div class="config row">
   mode:
   <button id="mode-lazy" class="active">lazy (default)</button>
   <button id="mode-wrap">wrap (opt-in: visible underline + keyboard tab)</button>
+</div>
+<div class="config row">
   trigger:
   <button id="mode-hover" class="active">hover</button>
   <button id="mode-click">click</button>
   <button id="mode-hint">hover+?</button>
-  <span style="margin-left:auto;font-size:12px;color:#666">tip: serve this dir over <code>python3 -m http.server</code></span>
+</div>
+<div class="config row">
+  pseudocode:
+  <button id="pc-collapsed" class="active">collapsed (default)</button>
+  <button id="pc-expanded">expanded</button>
+  <button id="pc-off">off</button>
 </div>
 
 <h2>NEON (aarch32 + aarch64)</h2>
@@ -110,6 +120,7 @@ or even an overloaded SVE form like <code>svadd_z</code> (which resolves to many
 <script>
   let trigger = 'hover';
   let wrap = false;
+  let pseudocode = 'collapsed';
 
   function reinit() {
     if (!window.SimdTooltips) return;
@@ -117,18 +128,24 @@ or even an overloaded SVE form like <code>svadd_z</code> (which resolves to many
     SimdTooltips.unwrap('body');                 // safe even when not wrapped
     // 'hover+?' is lazy-only; force lazy mode if user picked it under wrap.
     const effectiveWrap = (trigger === 'hover+?') ? false : wrap;
-    SimdTooltips.init({ scope: 'body', on: trigger, wrap: effectiveWrap });
+    SimdTooltips.init({ scope: 'body', on: trigger, wrap: effectiveWrap, pseudocode });
     document.getElementById('mode-hover').classList.toggle('active', trigger === 'hover');
     document.getElementById('mode-click').classList.toggle('active', trigger === 'click');
     document.getElementById('mode-hint').classList.toggle('active', trigger === 'hover+?');
     document.getElementById('mode-lazy').classList.toggle('active', !effectiveWrap);
     document.getElementById('mode-wrap').classList.toggle('active', effectiveWrap);
+    document.getElementById('pc-collapsed').classList.toggle('active', pseudocode === 'collapsed');
+    document.getElementById('pc-expanded').classList.toggle('active', pseudocode === 'expanded');
+    document.getElementById('pc-off').classList.toggle('active', pseudocode === 'off');
   }
   document.getElementById('mode-hover').addEventListener('click', () => { trigger = 'hover'; reinit(); });
   document.getElementById('mode-click').addEventListener('click', () => { trigger = 'click'; reinit(); });
   document.getElementById('mode-hint').addEventListener('click', () => { trigger = 'hover+?'; reinit(); });
   document.getElementById('mode-lazy').addEventListener('click', () => { wrap = false; reinit(); });
   document.getElementById('mode-wrap').addEventListener('click', () => { wrap = true; reinit(); });
+  document.getElementById('pc-collapsed').addEventListener('click', () => { pseudocode = 'collapsed'; reinit(); });
+  document.getElementById('pc-expanded').addEventListener('click', () => { pseudocode = 'expanded'; reinit(); });
+  document.getElementById('pc-off').addEventListener('click', () => { pseudocode = 'off'; reinit(); });
 </script>
 
 </body>

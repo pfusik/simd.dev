@@ -33,9 +33,12 @@ import re
 import sys
 from pathlib import Path
 
-# Tags whose text content is not visible / not user prose. We treat them
-# the same way the runtime library does for its skip-selector.
-SKIP_TAGS = {"script", "style", "textarea", "input", "select", "option", "noscript"}
+# Tags whose *text content* should not be scanned. None of these are void
+# elements -- void elements (input, br, hr, img, meta, ...) have no content
+# and so don't matter here; including a void element would be a bug because
+# its end tag never fires and the skip stack would never unwind. Mirrors
+# the runtime library's skip-selector minus the voids.
+SKIP_TAGS = {"script", "style", "textarea", "select", "option", "noscript"}
 
 # C identifier shape -- matches what the runtime tokenizer accepts.
 TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -45,21 +48,27 @@ TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 # Visible text extraction
 # ---------------------------------------------------------------------------
 class _TextCollector(html.parser.HTMLParser):
+    """Collect text outside SKIP_TAGS. Tracks a stack of open SKIP_TAGS rather
+    than a bare depth counter so an out-of-order or stray closing tag in the
+    input HTML can't corrupt the rest of the parse."""
+
     def __init__(self):
         super().__init__(convert_charrefs=True)
-        self._skip_depth = 0
+        self._skip_stack: list[str] = []
         self.parts: list[str] = []
 
     def handle_starttag(self, tag, attrs):
         if tag in SKIP_TAGS:
-            self._skip_depth += 1
+            self._skip_stack.append(tag)
 
     def handle_endtag(self, tag):
-        if tag in SKIP_TAGS and self._skip_depth > 0:
-            self._skip_depth -= 1
+        # Only pop if the stack top matches the closing tag. Unbalanced
+        # closing tags (rare but real in the wild) are ignored.
+        if self._skip_stack and self._skip_stack[-1] == tag:
+            self._skip_stack.pop()
 
     def handle_data(self, data):
-        if self._skip_depth == 0:
+        if not self._skip_stack:
             self.parts.append(data)
 
 
@@ -82,7 +91,12 @@ def find_referenced_names(text: str, all_names: set[str]) -> set[str]:
     return found
 
 
-def build_subset(referenced: set[str], names_doc: dict, data_doc: dict) -> tuple[dict, dict]:
+def build_subset(
+    referenced: set[str],
+    names_doc: dict,
+    data_doc: dict,
+    strip_pseudocode: bool = False,
+) -> tuple[dict, dict]:
     name_set = set(names_doc.get("names") or [])
     type_set = set(names_doc.get("types") or [])
     ambiguous = names_doc.get("ambiguous") or {}
@@ -90,7 +104,16 @@ def build_subset(referenced: set[str], names_doc: dict, data_doc: dict) -> tuple
 
     kept_names = sorted(referenced & name_set)
     kept_types = sorted(set(kept_names) & type_set)
-    kept_records = {n: records[n] for n in kept_names if n in records}
+    if strip_pseudocode:
+        kept_records = {}
+        for n in kept_names:
+            if n not in records:
+                continue
+            r = dict(records[n])
+            r.pop("pseudocode", None)
+            kept_records[n] = r
+    else:
+        kept_records = {n: records[n] for n in kept_names if n in records}
     kept_ambig = {a: ambiguous[a] for a in kept_names if a in ambiguous}
 
     subset_names = {
@@ -129,7 +152,7 @@ _INJECT_TEMPLATE = """\
   if (!window.SimdTooltips) return;
   var names = {names_json};
   var data  = {data_json};
-  var opts  = {{ on: {on_json}, wrap: {wrap_js}, names: names, data: data }};
+  var opts  = {{ on: {on_json}, wrap: {wrap_js}, pseudocode: {pseudocode_json}, names: names, data: data }};
   if (document.readyState === 'loading') {{
     document.addEventListener('DOMContentLoaded', function () {{ SimdTooltips.init(opts); }});
   }} else {{
@@ -147,12 +170,14 @@ def inject(
     subset_data: dict,
     on: str,
     wrap: bool,
+    pseudocode: str,
 ) -> str:
     block = _INJECT_TEMPLATE.format(
         library=_safe_for_script(library),
         names_json=_safe_for_script(json.dumps(subset_names, ensure_ascii=False, separators=(",", ":"))),
         data_json=_safe_for_script(json.dumps(subset_data, ensure_ascii=False, separators=(",", ":"))),
         on_json=json.dumps(on),
+        pseudocode_json=json.dumps(pseudocode),
         wrap_js="true" if wrap else "false",
     )
     if "</body>" in html_text:
@@ -188,6 +213,13 @@ def main(argv: list[str] | None = None) -> int:
         help="walk and wrap mode (visible underline + tab focus)",
     )
     p.add_argument(
+        "--pseudocode",
+        default="collapsed",
+        choices=["collapsed", "expanded", "off"],
+        help="upstream pseudocode in tooltips: collapsed (default), expanded, or off "
+        "(off also strips pseudocode from the embedded data, shrinking the output)",
+    )
+    p.add_argument(
         "--data",
         type=Path,
         default=_default_data_dir(),
@@ -221,10 +253,16 @@ def main(argv: list[str] | None = None) -> int:
     visible = collect_text(html_text)
     all_names = set(names_doc.get("names") or [])
     referenced = find_referenced_names(visible, all_names)
-    subset_names, subset_data = build_subset(referenced, names_doc, data_doc)
+    subset_names, subset_data = build_subset(
+        referenced, names_doc, data_doc,
+        strip_pseudocode=(args.pseudocode == "off"),
+    )
 
     # Inject.
-    out = inject(html_text, library, subset_names, subset_data, args.on, args.wrap)
+    out = inject(
+        html_text, library, subset_names, subset_data,
+        args.on, args.wrap, args.pseudocode,
+    )
 
     # Write.
     if args.output == "-":
