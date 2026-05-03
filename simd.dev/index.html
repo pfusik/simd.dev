@@ -24,20 +24,34 @@
 
 <section class="search">
   <h2>Search intrinsics &amp; types</h2>
-  <p class="muted">Type any part of a name — intrinsic <em>or</em> SIMD vector type. Try
-    <code data-q="_mm256_add">_mm256_add</code>,
-    <code data-q="vfma">vfma</code>,
-    <code data-q="svadd">svadd</code>,
-    <code data-q="__m512i">__m512i</code> (type),
-    <code data-q="svbool_t">svbool_t</code> (type).
+  <p class="muted">Type any part of a name — intrinsic <em>or</em> SIMD vector type. Multi-word terms compose with AND, so
+    <code data-q="add f16">add f16</code> matches names containing both <code>add</code> and <code>f16</code>.
+    You can also add filters: <code data-q="arch:aarch64 family:sve">arch:aarch64 family:sve</code>,
+    or combine them: <code data-q="arch:aarch32 add f16">arch:aarch32 add f16</code>.
   </p>
 
   <div class="searchbox">
-    <input id="q" type="search" placeholder="e.g. _mm256_fmadd_ps or vqtbl1q_u8 or svfloat32_t" autocomplete="off" spellcheck="false">
+    <input id="q" type="search" placeholder="e.g. _mm256_fmadd_ps · vqtbl1q_u8 · svfloat32_t · arch:x86_64 · family:AVX2" autocomplete="off" spellcheck="false">
     <span id="search-status" class="muted"></span>
   </div>
 
-  <ul id="results" class="results" aria-live="polite"></ul>
+  <div class="chip-row">
+    <span class="chip-label">arch</span>
+    <div id="arch-chips" class="chips"></div>
+  </div>
+  <div class="chip-row">
+    <span class="chip-label">family</span>
+    <div id="family-chips" class="chips collapsible"></div>
+    <button id="family-toggle" type="button" class="chip-toggle" aria-expanded="false">more…</button>
+  </div>
+
+  <section id="results-section" class="results-section" hidden>
+    <div class="results-head">
+      <h3>Results</h3>
+      <span id="results-count" class="muted"></span>
+    </div>
+    <ul id="results" class="results" aria-live="polite"></ul>
+  </section>
   <div id="card" class="card" hidden></div>
 </section>
 

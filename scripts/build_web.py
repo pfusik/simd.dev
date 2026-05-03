@@ -309,6 +309,10 @@ def main():
         "version": 1,
         "count": len(records),
         "records": records,
+        # Mirror the ambiguous map from the names index so a single fetch of
+        # simd-data.json is enough for consumers (e.g. the simd.dev landing
+        # page's search) that want both records *and* alias resolution.
+        "ambiguous": ambiguous_aliases,
     }
 
     (DIST / "simd-names.json").write_text(

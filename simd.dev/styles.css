@@ -122,15 +122,116 @@ p { margin: 0 0 0.9rem; }
     white-space: nowrap;
 }
 
+/* Filter chips (arch, family) below the search box. */
+.chip-row {
+    display: flex;
+    gap: 0.5rem;
+    align-items: flex-start;
+    margin-top: 0.55rem;
+    font-size: 0.85em;
+}
+.chip-label {
+    flex: 0 0 auto;
+    color: var(--muted);
+    padding: 4px 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.92em;
+}
+.chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    flex: 1 1 auto;
+    min-width: 0;          /* allow flex shrink for the truncation below */
+}
+
+/* Collapsible chip row -- when collapsed, clip to ~one line; when expanded
+   (the "more" button toggles a class), let it wrap to as many rows as needed. */
+.chips.collapsible {
+    max-height: 1.9em;
+    overflow: hidden;
+}
+.chips.collapsible.expanded {
+    max-height: none;
+}
+.chip-toggle {
+    flex: 0 0 auto;
+    font: inherit;
+    font-size: 0.85em;
+    padding: 2px 8px;
+    border: 1px dashed var(--border);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    align-self: flex-start;
+}
+.chip-toggle:hover, .chip-toggle:focus {
+    border-color: var(--accent);
+    color: var(--accent);
+    outline: none;
+}
+.chips .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font: inherit;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.85em;
+    padding: 2px 8px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: white;
+    color: var(--fg);
+    cursor: pointer;
+    transition: background 0.05s, border-color 0.05s, color 0.05s;
+}
+.chips .chip:hover, .chips .chip:focus {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    outline: none;
+}
+.chips .chip.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: white;
+}
+.chips .chip-count {
+    font-size: 0.85em;
+    opacity: 0.65;
+}
+.chips .chip.active .chip-count { opacity: 0.85; }
+
+/* Results section -- hidden until the query produces something. Borders
+   on both sides so the chip list doesn't visually blend into the card
+   that follows. */
+.results-section {
+    margin-top: 1.2rem;
+    padding: 0.9rem 0;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+}
+.results-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    margin-bottom: 0.4rem;
+}
+.results-head h3 {
+    margin: 0;
+    font-size: 0.95rem;
+}
+.results-head .muted { font-size: 0.85em; }
+
 /* Results list */
 .results {
     list-style: none;
-    margin: 0.6rem 0 0;
+    margin: 0.4rem 0 0;
     padding: 0;
     display: flex;
     flex-wrap: wrap;
     gap: 0.4rem 0.5rem;
-    max-height: 14rem;
+    max-height: 22rem;
     overflow-y: auto;
 }
 .results:empty { display: none; }
