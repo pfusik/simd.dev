@@ -132,18 +132,65 @@ short form) → 22 typed canonicals. Today the tooltip lists the first
 or auto-pick using nearby context (e.g., look at adjacent text for a
 type hint such as `s32`/`f64`).
 
-## Per-page subset bundling at build time
+## Markdown / static-site integrations (build-time subset bundling)
 
-**Why:** for static sites that *do* have a build step, embedding only
-the intrinsics actually used on the page would shrink the payload to
-a few KB. Provide an opt-in build helper (Pandoc/markdown-it/Eleventy
-plugin) that scans rendered HTML, resolves names against the DB, and
-inlines just the records needed as `<script type="application/json">`.
+**Why:** the standalone form of this already exists as
+[`simd-annotate/`](simd-annotate/README.md) — runs over a finished HTML
+file, embeds the slice of the DB that file actually references. What's
+still missing is *direct integration with the markdown / static-site
+toolchains* people actually use, so the inlining happens inside the
+normal build instead of as a separate post-processing pass.
+
+**Candidate integrations (all using the same library + DB):**
+
+- **[Pandoc](https://pandoc.org/)** + a Lua filter — single binary, the
+  Lua filter scans code blocks (and prose) and either wraps tokens or
+  emits a per-page subset. Most portable for academic / book authors.
+- **[markdown-it](https://github.com/markdown-it/markdown-it)** plugin
+  — same idea in Node, fits the JS ecosystem (Docusaurus, VuePress, etc.).
+- **[Python-Markdown](https://python-markdown.github.io/)** treeprocessor
+  — fits Pelican / mkdocs-material plugin authors.
+- **[mdBook](https://github.com/rust-lang/mdBook)** preprocessor — Rust;
+  no existing SIMD plugin, but the preprocessor API is small.
+- **[remark](https://github.com/remarkjs/remark) / [rehype](https://github.com/rehypejs/rehype)**
+  plugins — fits any unified.js pipeline (Astro, Next.js MDX, …).
+- **[mkdocs](https://www.mkdocs.org/) hook** — for engineering-team docs sites.
+- **[Eleventy](https://www.11ty.dev/)** plugin — for the static-site
+  community already wiring custom Markdown pipelines.
 
 ## VS Code extension
 
-**Why:** the same library plus a webview-aware shim could power a
-preview pane in VS Code. Same data, different presentation surface.
+**Why:** the database is the moat; an editor extension is the obvious
+next presentation surface. clangd already covers ~15% of Intel intrinsics
+with rich Doxygen (mostly SSE/AVX/FMA) and signature-only for AVX-512
+and almost all of ARM NEON/SVE/SME — so a `HoverProvider` backed by our
+DB fills a real gap, especially for the ~5,000 AVX-512 and ~14,000 ARM
+intrinsics where clangd shows just the signature.
+
+**Sketch:**
+- `simd-vscode/` sibling to `simd-tooltip/` and `simd-annotate/`.
+- `package.json` activation on `onLanguage:c` / `onLanguage:cpp`,
+  optionally `markdown` for code fences in prose.
+- `HoverProvider` returning a `MarkdownString`: signature in a fenced
+  block, description, family/arch badges, optional pseudocode block,
+  link to upstream docs.
+- Vendor `simd-tooltip/dist/simd-data.json` directly (~9 MB raw / ~450 KB
+  gzipped is fine for a VS Code extension package).
+- VS Code stacks hover providers, so coexisting with clangd is free
+  for v1 — readers see clangd's content followed by ours; we fill the
+  gaps automatically.
+- Settings: `simd-tooltips.pseudocode = expanded | off` (no "collapsed"
+  -- VS Code hover panels can't do `<details>`).
+- Stretch: a "Show full info" command opens a webview pane that
+  embeds `simd-tooltips.js` directly and renders the rich tooltip
+  layout for the symbol under cursor (effectively the per-intrinsic
+  page from the static-pages idea, but in-IDE).
+
+**Effort:** ~½ day for v0 (working hover, no settings); ~3 days for
+a polished v1 with settings + webview + Marketplace publish. ~300-500
+lines of TypeScript total. Marketplace publish has one-time friction
+(publisher account, signing) but can be automated thereafter via a
+GitHub Action triggered when `simd-tooltip/dist/` changes.
 
 ## Intel arch refinement
 
@@ -154,10 +201,13 @@ preview pane in VS Code. Same data, different presentation surface.
 
 ## SIMD support for RISC-V vector and WebAssembly SIMD
 
-**Why:** the project README flags this as an open question. Both have
-official intrinsic lists (RISC-V vector intrinsics in the rvv-intrinsic-doc
-repo; WASM SIMD in the wasm-simd-128 spec). Coverage would broaden the
-audience.
+**Why:** the database covers ARM and x86 today. Both RVV and WASM-SIMD
+have official, machine-readable intrinsic lists (RISC-V Vector intrinsics
+in [riscv-non-isa/rvv-intrinsic-doc](https://github.com/riscv-non-isa/rvv-intrinsic-doc),
+WebAssembly SIMD via the [wasm-simd-128 spec](https://github.com/WebAssembly/simd)
+and clang's `wasm_simd128.h`). Adding them would broaden the audience to
+embedded / RISC-V folks and to the substantial population of people doing
+SIMD in JS via WASM.
 
 ## Refresh detection
 
@@ -172,3 +222,4 @@ hit them.
 index is already small enough to ship to every page; with a fuzzy match
 (e.g., "addmask" → `_mm512_mask_add_pd`) this becomes the keyboard-first
 counterpart to hover detection.
+

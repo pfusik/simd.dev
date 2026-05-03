@@ -1,231 +1,74 @@
 # simd.dev
 
-IMPORTANT: only use resources with permissible copyright.
-DO NOT USE simd.info for anything.
+A collection of data and tools related to SIMD intrinsics.
 
-Static-site renderer for SIMD-rich technical writing: takes Markdown
-(or annotated source) and produces HTML where every SIMD intrinsic is
-**hover-to-explain** with a link to the official ARM/Intel docs.
+Contains:
 
-Goal: make educational walkthroughs of SIMD code (NEON, SSE, AVX2,
-AVX-512, SVE2) self-contained — readers don't need to keep a
-separate browser tab open to look up `vld1q_u16` or `_mm256_permutevar8x32_epi32`.
-
-## Status
-
-Step 1: unified intrinsic database in
-[`data/intrinsics.jsonl`](data/intrinsics.jsonl) — 21,484 records spanning
-ARM (NEON / Helium / SVE / SVE2 / SME) and Intel (MMX / SSE* / AVX /
+- **[data](data/)** unified intrinsic database in [`data/intrinsics.jsonl`](data/intrinsics.jsonl) —
+21,484 records spanning ARM (NEON / Helium / SVE / SVE2 / SME) and Intel (MMX / SSE* / AVX /
 AVX2 / AVX-512 / AMX / etc.).  See [`data/README.md`](data/README.md)
 for schema, provenance, and rebuild instructions.
+**Generated automatically from upstream sources** (ARM ACLE, Intel Intrinsics Guide XML,
+LLVM clang headers); pure stdlib Python, no LLM in the loop.
 
-Step 2: drop-in JS tooltip library in
-[`simd-tooltip/`](simd-tooltip/README.md) — one `<script>` tag adds
+- **[simd-tooltip](simd-tooltip/) - drop-in JS tooltip library in
+— one `<script>` tag adds
 hover (or click, or hover-with-`?`-badge) tooltips to any HTML page,
 detecting intrinsic names in text without touching the DOM by default.
 See [`simd-tooltip/README.md`](simd-tooltip/README.md) for install
 instructions and [`simd-tooltip/examples/demo.html`](simd-tooltip/examples/demo.html) for a
 working page.
 
-Step 3: a CLI tool [`simd-annotate/`](simd-annotate/README.md) that
+- a CLI tool [`simd-annotate/`](simd-annotate/README.md) that
 takes an arbitrary HTML file and emits a self-contained, **100%
 offline** HTML page with the library plus only the slice of the
 intrinsic database the page actually references embedded inline. Useful
 for archived posts, e-book exports, intranet docs.
 
-## Why this doesn't already exist
+## Why?
 
-Surveyed the landscape (see [Existing landscape](#existing-landscape)
-below) — there's no off-the-shelf tool that does this specifically.
-The closest things are:
+I like to play with SIMD code but I tend to forget things quickly.
+So having immediate access to an explanation of what an intrinsic does
+is very helpful.
 
-- **Compiler Explorer (godbolt)** shows tooltips on hover when
-  you're inside its Monaco editor — but it's a full IDE-style app,
-  not a static doc renderer.
-- **clangd** (LSP) shows hover info in your IDE — editor-only, not
-  exportable to HTML.
-- **Intel's Intrinsics Guide** is itself a JS app with rich search
-  and detail panels, but you can't embed its tooltips on third-party
-  content.
+I looked around, but couldn't find either a library like this or a
+well-defined open database. So, with the help of Claude, I built it on one
+Sunday afternoon.
 
-It's not hard to build, just nobody has — yet.
+One motivation was the tooltips in Compiler Explorer — but those are only for
+the generated assembly, not for the C/C++ source side.
 
-## Existing landscape
+Note: I also found simd.info — it's a great resource with much deeper info,
+but it's not open and doesn't provide the tooling I wanted. The depth there
+(especially in the paid version, from the screenshots) is impressive; if your
+goal is reference-grade reading rather than embedding tooltips in your own
+docs, that's a better fit.
 
-### Intrinsic databases (the "what does it do" content)
-
-- **ARM**: machine-readable JSON/XML of all NEON / SVE / SVE2
-  intrinsics on the developer portal.  Each entry has signature,
-  prose semantic description, behavior pseudocode, instruction
-  mapping.
-- **Intel**: ships an XML data file with their Intrinsics Guide
-  ([download][intel-xml-data]).  Same shape — name, description,
-  parameters, return, equivalent instruction, pseudocode.
-- Each intrinsic has a stable canonical doc URL:
-  - `https://developer.arm.com/architectures/instruction-sets/intrinsics/<name>`
-  - `https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=<name>`
-
-[intel-xml-data]: https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html
-
-### Tooltip / popover libraries (the hover UX)
-
-- **Tippy.js** — most popular, ~10 KB, supports keyboard a11y,
-  configurable.  Easy to attach to elements: `tippy('.intrinsic',
-  { content: ... })`.
-- **Popper.js** (Tippy's positioning engine) — lower-level if you
-  want fully custom rendering.
-- **Floating UI** — modern successor to Popper.
-
-### Markdown → HTML with extensibility hooks
-
-- **Pandoc** + a Lua filter — single binary, the Lua filter scans
-  code blocks and wraps tokens.  Most portable.
-- **markdown-it** (JS) + a custom plugin — same idea in Node.
-- **Python-Markdown** + treeprocessor — same idea in Python.
-- **mdBook** (Rust) — has a preprocessor API; no existing SIMD plugin.
-
-## Architecture
-
-Three pieces, ~300 lines total.
-
-### 1. Build-time markdown processor (~80 lines)
-
-For each fenced code block, scan tokens against a precompiled
-intrinsic-name regex, replace matches with `<span class="intrinsic"
-data-name="vld1q_u16">vld1q_u16</span>`.  Output HTML.
-
-Regex patterns (forgiving):
-
-- NEON: `v[a-zA-Z]+q?_[suf]?\d+(_[suf]\d+)?`
-- x86:  `_mm\d*_[a-zA-Z0-9_]+`
-
-Implementation choices, in order of preference:
-
-1. **Pandoc + Lua filter** (single binary, portable).
-2. **Python-Markdown + treeprocessor** (easy to extend).
-3. **markdown-it + plugin** (Node ecosystem if site is JS-heavy).
-
-### 2. Intrinsic database (~10 MB JSON)
-
-Fetched once from ARM + Intel's official sources, normalized to
-something like:
-
-```json
-{
-  "vld1q_u16": {
-    "isa": "neon",
-    "signature": "uint16x8_t vld1q_u16(uint16_t const *ptr)",
-    "brief": "Load 8 unsigned 16-bit elements from memory.",
-    "description": "...",
-    "pseudocode": "for i in 0..7: out[i] = mem[ptr + 2*i]",
-    "instruction": "LD1 {Vt.8H}, [Xn]",
-    "doc_url": "https://developer.arm.com/.../vld1q_u16"
-  },
-  ...
-}
-```
-
-Embed in the page or load lazily via fetch.
-
-A nice extra: include the **pseudocode** (which both ARM and
-Intel publish), so the tooltip shows the SIMD operation as code,
-not just prose.  More educational than English.
-
-### 3. Frontend script (~30 lines + Tippy.js)
-
-On page load, find `.intrinsic` spans, attach Tippy tooltips that
-show: signature + brief description + pseudocode (if present),
-with a "Read more" link to ARM/Intel docs.
-
-```js
-import tippy from 'tippy.js';
-const db = await fetch('intrinsics.json').then(r => r.json());
-document.querySelectorAll('.intrinsic').forEach(el => {
-  const info = db[el.dataset.name];
-  if (!info) return;
-  tippy(el, {
-    content: renderTooltip(info),
-    interactive: true,
-    allowHTML: true,
-  });
-});
-```
-
-## Cheaper-but-uglier alternatives
-
-If full hover-with-content is too much:
-
-1. **Just link, don't tooltip** — the markdown processor wraps
-   intrinsic names in `<a href="...">` to ARM/Intel.  Click goes
-   to docs.  No hover content.  ~30 lines, no JS, no DB.
-2. **Static HTML with `title=""` attributes** instead of Tippy —
-   browser native tooltip, no JS, ugly styling.  ~50 lines, zero
-   deps.  Good as a v0.
-
-## Use cases
-
-- The driving use case: educational walkthroughs of SIMD kernels in
-  the canasort project (e.g., `extras/fused_oct/walkthroughs/oct_contains.md`).
-- Generalizes to any SIMD-heavy doc:
-  - Algorithm tutorials (Lemire's blog posts, ARM/Intel optimization
-    guides, etc.)
-  - Code review comments where reviewer drops in a code snippet
-  - Self-documenting library headers (with a build step that
-    produces an HTML reference)
-
-## Open questions
-
-- **Source-of-truth for the database**: ARM's downloadable JSON has
-  some quirks (multiple entries per name with different
-  architecture variants).  Need to pick one canonical entry per
-  name and pre-flatten.
-- **Maintenance**: ARM and Intel update their lists periodically
-  (new ISA extensions, e.g., AVX10).  Refresh cadence?
-- **Coverage**: the regex catches NEON / SSE / AVX naming; what
-  about SVE (`sv*`)?  RISC-V vector intrinsics?  WebAssembly SIMD?
-- **Disambiguation**: some names appear in multiple ISAs (rare but
-  possible); how to render?  Maybe a per-doc `defaultIsa: neon`
-  hint, or just show both with separator.
-- **Accessibility**: tooltips on hover-only is bad for keyboard /
-  touch users.  Tippy supports click-to-open; should we make that
-  the default?
-- **Performance**: a 10 MB JSON on every page load is heavy for
-  blog-style use.  Could split per-ISA, or generate per-page
-  subsets at build time (only intrinsics actually mentioned in the
-  doc).
-
-## Naming / framing
-
-- **simd.dev** — domain available?  Domain itself unclear; pick
-  something else if not.
-- Project as a **library** (drop-in MD processor) vs **service**
-  (paste markdown, get HTML)?  Library first; service is just
-  a wrapper.
-- A **VS Code extension** that previews `.md` files with this
-  treatment would be a natural follow-on.
-
-## Prior art / similar projects worth checking
-
-- [`docusaurus`](https://docusaurus.io/) — has remark/rehype
-  plugin slots; a remark plugin could implement the intrinsic
-  scanning.
-- [`mkdocs-material`](https://squidfunk.github.io/mkdocs-material/)
-  — mkdocs hook system could host the same logic.
-- The Highway library has `g3doc/` writeups that link to specific
-  intrinsics inline; manual labor today.
-- ARM Compute Library has function-level docs but doesn't link
-  intrinsics.
-
-## Initial milestones
-
-1. **v0**: Pandoc Lua filter that wraps intrinsic names in `<a
-   href="...">` (no hover, just links).  Validates the regex and
-   the URL templates.  ~30 lines.
-2. **v0.1**: Same, but with `title="..."` static tooltips
-   populated from a tiny hand-curated JSON of the ~50 intrinsics
-   used in the canasort docs.
-3. **v1**: Full pipeline — auto-built JSON DB from official
-   sources, Tippy.js tooltips with pseudocode, deployed as a
-   reusable Pandoc/markdown-it/python-markdown filter.
-4. **v1.1**: VS Code extension wrapping the same renderer for
-   live preview.
+Related projects:
+- **[Compiler Explorer](https://godbolt.org/) (godbolt)** has rich hover tooltips
+  on the *assembly* side (its [`asm-docs/`](https://github.com/compiler-explorer/compiler-explorer/tree/main/lib/asm-docs)
+  directory ships ~2 MB of curated entries for x86 / aarch64 / RISC-V / etc.).
+  On the C/C++ source side it has none of its own — and it's a full IDE-style
+  app, not a static doc renderer in any case.
+- **clangd** (LSP) shows hover info in your IDE — editor-only, not exportable
+  to HTML. Coverage is uneven: rich Doxygen for AVX/AVX2/FMA and most SSE
+  (~15% of the Intel catalog), but only the bare signature for AVX-512 and
+  for nearly all of ARM NEON / SVE / SME (the auto-generated ARM headers
+  ship without prose).
+- **[Intel's Intrinsics Guide](https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html)**
+  — the reference everyone uses for browsing, with rich descriptions and
+  pseudocode. JavaScript app though; you can't embed its tooltips on
+  third-party content. Our DB pulls signatures, ISA flags, and pseudocode
+  from the same XML it's built on.
+- **simd.info** — seems to be a very rich and deep database with a different
+  focus (reference reading rather than tooltip embedding). Not open.
+- **[Highway](https://github.com/google/highway)** (Google's portable SIMD
+  library) has writeups under [`g3doc/`](https://github.com/google/highway/tree/master/g3doc)
+  that mention specific intrinsics inline as cross-references — useful, but
+  hand-curated rather than driven by a database. Different scope (portable
+  abstraction layer over Intel/NEON/RISC-V/WASM SIMD), but a kindred-spirit
+  example.
+- **[ARM Compute Library](https://github.com/ARM-software/ComputeLibrary)**
+  has function-level / kernel-level docs but doesn't link individual
+  NEON/SVE intrinsics — different abstraction layer, complementary rather
+  than overlapping.
