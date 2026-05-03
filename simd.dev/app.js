@@ -62,6 +62,20 @@
         $q.addEventListener('input', onInput);
         $q.addEventListener('keydown', onKeydown);
         $results.addEventListener('click', onResultsClick);
+
+        const $home = document.getElementById('home-link');
+        if ($home) $home.addEventListener('click', (ev) => {
+            // Reset to a clean URL + cleared search state, without a full reload.
+            // Falls back to the href attribute if JS fails for any reason.
+            ev.preventDefault();
+            $q.value = '';
+            $card.hidden = true;
+            renderResults('');
+            refreshChipState();
+            history.pushState(null, '', location.pathname + location.search);
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+            $q.focus();
+        });
         document.querySelectorAll('code[data-q]').forEach(c => {
             c.style.cursor = 'pointer';
             c.addEventListener('click', () => {
