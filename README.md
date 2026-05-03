@@ -24,7 +24,7 @@ Step 2: drop-in JS tooltip library in
 hover (or click, or hover-with-`?`-badge) tooltips to any HTML page,
 detecting intrinsic names in text without touching the DOM by default.
 See [`simd-tooltip/README.md`](simd-tooltip/README.md) for install
-instructions and [`examples/demo.html`](examples/demo.html) for a
+instructions and [`simd-tooltip/examples/demo.html`](simd-tooltip/examples/demo.html) for a
 working page.
 
 ## Why this doesn't already exist

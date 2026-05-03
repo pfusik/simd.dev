@@ -19,9 +19,10 @@
 <body>
 
 <h1>simd-tooltips demo</h1>
-<p>Just hover anywhere — when the cursor lands on a SIMD intrinsic name, a tooltip pops up with its
-   signature and a short description.  No DOM walk, no markup mutation: the library detects words
-   under the cursor on the fly using <code>caretPositionFromPoint</code>.</p>
+<p>Just hover anywhere — when the cursor lands on a SIMD intrinsic name <em>or a SIMD type</em>
+   (like <code>__m256i</code>, <code>int8x16_t</code>, <code>svfloat32_t</code>), a tooltip pops up
+   with its signature and a short description.  No DOM walk, no markup mutation: the library
+   detects words under the cursor on the fly using <code>caretPositionFromPoint</code>.</p>
 
 <div class="config row">
   mode:
@@ -104,7 +105,7 @@ or even an overloaded SVE form like <code>svadd_z</code> (which resolves to many
   - scan <body>, skipping <script>/<style>/<input>/<textarea>,
   - attach hover+focus tooltip on each match.
 -->
-<script src="../simd-tooltip/dist/simd-tooltips.js" defer></script>
+<script src="../dist/simd-tooltips.js" defer></script>
 
 <script>
   let trigger = 'hover';

@@ -601,6 +601,18 @@
     const desc = rec.description ? `<div class="simd-tt-desc">${escapeHtml(rec.description)}</div>` : '';
     const link = rec.doc_url ? `<div class="simd-tt-foot"><a href="${escapeAttr(rec.doc_url)}" target="_blank" rel="noopener">${rec.source === 'arm-acle' ? 'Arm developer docs' : 'Intel Intrinsics Guide'} →</a></div>` : '';
 
+    // SIMD types use a slimmer layout: the "definition" is a one-line typedef
+    // and lives next to the description. Intrinsics keep the multi-line <pre>
+    // signature block.
+    if (rec.kind === 'type') {
+      const kindBadge = `<span class="simd-tt-kind">type</span>`;
+      const def = rec.definition ? `<code class="simd-tt-typedef">${escapeHtml(rec.definition)}</code>` : '';
+      return `<div class="simd-tt-head"><code>${escapeHtml(name)}</code> ${kindBadge} ${families} ${archs}</div>
+        ${def}
+        ${desc}
+        ${link}`;
+    }
+
     return `<div class="simd-tt-head"><code>${escapeHtml(name)}</code> ${families} ${archs}</div>
       <pre class="simd-tt-sig">${escapeHtml(rec.definition || '')}</pre>
       ${desc}
@@ -705,6 +717,8 @@
     .simd-tt-tag { font-size: 10.5px; padding: 1px 6px; background: #2c5282; color: #cfe1ff; border-radius: 999px; line-height: 1.5; }
     .simd-tt-arch { font-size: 10.5px; padding: 1px 6px; background: #553c5b; color: #ffd2f0; border-radius: 999px; line-height: 1.5; }
     .simd-tt-sig { margin: 0 0 6px 0; padding: 6px 8px; background: #131722; border-radius: 4px; white-space: pre-wrap; overflow-x: auto; }
+    .simd-tt-typedef { display: block; margin: 0 0 6px 0; padding: 5px 8px; background: #131722; border-radius: 4px; color: #d8dde7; }
+    .simd-tt-kind { font-size: 10.5px; padding: 1px 6px; background: #4a3c2a; color: #ffd58a; border-radius: 999px; line-height: 1.5; }
     .simd-tt-desc { color: #c8ccd6; }
     .simd-tt-foot { margin-top: 6px; }
     .simd-tt-foot a { color: #8fb6ff; text-decoration: none; }

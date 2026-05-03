@@ -25,7 +25,8 @@ Copy these three files to any static host and include one script tag:
 By default the library:
 
 - Listens for `mousemove` globally; when the cursor is over a known SIMD
-  intrinsic name, shows a tooltip with signature + short description.
+  intrinsic *or* a SIMD type (e.g. `__m256i`, `int8x16_t`, `svfloat32_t`,
+  `__mmask8`, `svbool_t`), shows a tooltip with the relevant info.
 - Does **not** mutate the DOM (lazy mode).
 - Adds one `<style>` to `<head>` and one `<div class="simd-tooltip">` to
   `<body>`. Nothing else.
