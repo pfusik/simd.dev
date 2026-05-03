@@ -24,7 +24,7 @@ takes an arbitrary HTML file and emits a self-contained, **100%
 offline** HTML page with the library plus only the slice of the
 intrinsic database the page actually references embedded inline. Useful
 for archived posts, e-book exports, intranet docs.
-See [an example with annotations](simd-annotate/examples/sample.annotated.html)
+See [an example with annotations](simd-annotate/examples/sample.annotated.html).
 
 ## Why?
 
@@ -51,7 +51,7 @@ Related projects:
   — the reference everyone uses for browsing, with rich descriptions and
   pseudocode. Our DB pulls signatures, ISA flags, and pseudocode
   from the same XML it's built on.
-- **simd.info** — seems to be a very rich and deep database with a different
+- **[simd.info](simd.info)** — seems to be a very rich and deep database with a different
   focus (reference reading rather than tooltip embedding). Not open.
 - **[Highway](https://github.com/google/highway)** (Google's portable SIMD
   library) has writeups under [`g3doc/`](https://github.com/google/highway/tree/master/g3doc)
