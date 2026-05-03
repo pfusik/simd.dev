@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Saxpy with FMA — sample article</title>
+<style>
+  body { font: 16px/1.55 -apple-system, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; color: #1d2129; }
+  h1 { font-size: 1.6rem; }
+  pre { background: #f6f7f8; padding: 12px 14px; border-radius: 6px; overflow-x: auto; font-size: 13px; }
+  code { font-family: ui-monospace, Menlo, Consolas, monospace; }
+</style>
+</head>
+<body>
+
+<h1>Saxpy with FMA on x86 and aarch64</h1>
+
+<p>"Saxpy" — single-precision <code>a*x + y</code> — is the canonical kernel for measuring fused-multiply-add throughput.
+   Below are minimal SIMD implementations on x86 (AVX/FMA) and aarch64 (NEON).</p>
+
+<h2>x86 (AVX + FMA, 8 lanes per iteration)</h2>
+
+<pre>#include &lt;immintrin.h&gt;
+
+void saxpy_avx(float a, const float *x, const float *y, float *out, size_t n) {
+    __m256 va = _mm256_set1_ps(a);
+    for (size_t i = 0; i + 8 &lt;= n; i += 8) {
+        __m256 vx = _mm256_loadu_ps(x + i);
+        __m256 vy = _mm256_loadu_ps(y + i);
+        __m256 vr = _mm256_fmadd_ps(va, vx, vy);
+        _mm256_storeu_ps(out + i, vr);
+    }
+}</pre>
+
+<p>The hot intrinsic is <code>_mm256_fmadd_ps</code>: per-lane <code>a*b + c</code> with a single rounding step,
+   beating <code>_mm256_add_ps(_mm256_mul_ps(a, b), c)</code> in both throughput and accuracy.</p>
+
+<h2>aarch64 (NEON, 4 lanes per iteration)</h2>
+
+<pre>#include &lt;arm_neon.h&gt;
+
+void saxpy_neon(float a, const float *x, const float *y, float *out, size_t n) {
+    float32x4_t va = vdupq_n_f32(a);
+    for (size_t i = 0; i + 4 &lt;= n; i += 4) {
+        float32x4_t vx = vld1q_f32(x + i);
+        float32x4_t vy = vld1q_f32(y + i);
+        float32x4_t vr = vfmaq_f32(vy, vx, va);
+        vst1q_f32(out + i, vr);
+    }
+}</pre>
+
+<p>NEON's <code>vfmaq_f32(a, b, c)</code> computes <code>a + b * c</code> per lane (note the argument order is
+   different from Intel's <code>_mm256_fmadd_ps(a, b, c)</code> which is <code>a * b + c</code>).</p>
+
+<h2>SVE — scalable, length-agnostic</h2>
+
+<pre>#include &lt;arm_sve.h&gt;
+
+void saxpy_sve(float a, const float *x, const float *y, float *out, size_t n) {
+    svfloat32_t va = svdup_n_f32(a);
+    for (size_t i = 0; i &lt; n; i += svcntw()) {
+        svbool_t pg = svwhilelt_b32(i, n);
+        svfloat32_t vx = svld1_f32(pg, x + i);
+        svfloat32_t vy = svld1_f32(pg, y + i);
+        svfloat32_t vr = svmla_f32_m(pg, vy, vx, va);
+        svst1_f32(pg, out + i, vr);
+    }
+}</pre>
+
+<p>Notice the use of types <code>svfloat32_t</code> (a hardware-length-dependent vector) and <code>svbool_t</code>
+   (the predicate that handles the loop tail without needing a scalar epilogue). The
+   <code>svwhilelt_b32</code> intrinsic generates a per-lane mask that's true while <code>i &lt; n</code>.</p>
+
+</body>
+</html>

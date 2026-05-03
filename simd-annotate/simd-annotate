@@ -1,0 +1,257 @@
+#!/usr/bin/env python3
+"""simd-annotate: produce an offline-ready HTML page with embedded SIMD tooltips.
+
+Reads an HTML file, scans the visible text for SIMD intrinsic + type names,
+and writes a self-contained HTML output with the simd-tooltips library plus
+a *subset* of the intrinsics database (only the names referenced on the
+page) embedded inline. The result works 100% offline -- no JS fetches,
+nothing on the network.
+
+Reuses simd-tooltip/dist/ artifacts as-is. The library is included
+verbatim with `data-no-auto` so its auto-init is suppressed; we then call
+`SimdTooltips.init({...})` ourselves with the inline names+data and the
+desired trigger/wrap mode.
+
+Usage:
+    simd-annotate INPUT [-o OUTPUT] [--on TRIGGER] [--wrap] [--data DIR]
+
+    INPUT          HTML file (or '-' for stdin)
+    -o, --output   output file (default: stdout)
+    --on TRIGGER   hover (default) | click | hover+?
+    --wrap         opt into walk-and-wrap mode (visible underline + tab focus)
+    --data DIR     simd-tooltip/dist/ location (default: ../simd-tooltip/dist
+                   relative to this script)
+    --quiet        suppress the summary line on stderr
+"""
+
+from __future__ import annotations
+
+import argparse
+import html.parser
+import json
+import re
+import sys
+from pathlib import Path
+
+# Tags whose text content is not visible / not user prose. We treat them
+# the same way the runtime library does for its skip-selector.
+SKIP_TAGS = {"script", "style", "textarea", "input", "select", "option", "noscript"}
+
+# C identifier shape -- matches what the runtime tokenizer accepts.
+TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+# ---------------------------------------------------------------------------
+# Visible text extraction
+# ---------------------------------------------------------------------------
+class _TextCollector(html.parser.HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self._skip_depth = 0
+        self.parts: list[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in SKIP_TAGS:
+            self._skip_depth += 1
+
+    def handle_endtag(self, tag):
+        if tag in SKIP_TAGS and self._skip_depth > 0:
+            self._skip_depth -= 1
+
+    def handle_data(self, data):
+        if self._skip_depth == 0:
+            self.parts.append(data)
+
+
+def collect_text(html_text: str) -> str:
+    p = _TextCollector()
+    p.feed(html_text)
+    p.close()
+    return " ".join(p.parts)
+
+
+# ---------------------------------------------------------------------------
+# Name matching + subset construction
+# ---------------------------------------------------------------------------
+def find_referenced_names(text: str, all_names: set[str]) -> set[str]:
+    found: set[str] = set()
+    for m in TOKEN.finditer(text):
+        tok = m.group(0)
+        if tok in all_names:
+            found.add(tok)
+    return found
+
+
+def build_subset(referenced: set[str], names_doc: dict, data_doc: dict) -> tuple[dict, dict]:
+    name_set = set(names_doc.get("names") or [])
+    type_set = set(names_doc.get("types") or [])
+    ambiguous = names_doc.get("ambiguous") or {}
+    records = data_doc.get("records") or {}
+
+    kept_names = sorted(referenced & name_set)
+    kept_types = sorted(set(kept_names) & type_set)
+    kept_records = {n: records[n] for n in kept_names if n in records}
+    kept_ambig = {a: ambiguous[a] for a in kept_names if a in ambiguous}
+
+    subset_names = {
+        "version": names_doc.get("version", 1),
+        "count": len(kept_names),
+        "names": kept_names,
+        "types": kept_types,
+        "ambiguous": kept_ambig,
+    }
+    subset_data = {
+        "version": data_doc.get("version", 1),
+        "count": len(kept_records),
+        "records": kept_records,
+    }
+    return subset_names, subset_data
+
+
+# ---------------------------------------------------------------------------
+# Inject the library + inline data into the HTML
+# ---------------------------------------------------------------------------
+def _safe_for_script(s: str) -> str:
+    """Escape sequences that would break out of a <script> block in HTML.
+    Browsers terminate <script> at any literal `</script` (case-insensitive),
+    regardless of whether it's inside a string literal -- so we replace `</`
+    with `<\\/`. Both forms are equivalent in JavaScript and JSON."""
+    return s.replace("</", "<\\/")
+
+
+_INJECT_TEMPLATE = """\
+<!-- simd-annotate: embedded simd-tooltips library + on-page intrinsic data -->
+<script data-no-auto data-simd-tooltips-embed>
+{library}
+</script>
+<script data-simd-tooltips-init>
+(function () {{
+  if (!window.SimdTooltips) return;
+  var names = {names_json};
+  var data  = {data_json};
+  var opts  = {{ on: {on_json}, wrap: {wrap_js}, names: names, data: data }};
+  if (document.readyState === 'loading') {{
+    document.addEventListener('DOMContentLoaded', function () {{ SimdTooltips.init(opts); }});
+  }} else {{
+    SimdTooltips.init(opts);
+  }}
+}})();
+</script>
+"""
+
+
+def inject(
+    html_text: str,
+    library: str,
+    subset_names: dict,
+    subset_data: dict,
+    on: str,
+    wrap: bool,
+) -> str:
+    block = _INJECT_TEMPLATE.format(
+        library=_safe_for_script(library),
+        names_json=_safe_for_script(json.dumps(subset_names, ensure_ascii=False, separators=(",", ":"))),
+        data_json=_safe_for_script(json.dumps(subset_data, ensure_ascii=False, separators=(",", ":"))),
+        on_json=json.dumps(on),
+        wrap_js="true" if wrap else "false",
+    )
+    if "</body>" in html_text:
+        return html_text.replace("</body>", block + "</body>", 1)
+    if "</html>" in html_text:
+        return html_text.replace("</html>", block + "</html>", 1)
+    return html_text + "\n" + block
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+def _default_data_dir() -> Path:
+    return Path(__file__).resolve().parent.parent / "simd-tooltip" / "dist"
+
+
+def main(argv: list[str] | None = None) -> int:
+    p = argparse.ArgumentParser(
+        prog="simd-annotate",
+        description="Embed simd-tooltips library + on-page-only data into an HTML file.",
+    )
+    p.add_argument("input", help="input HTML file (or '-' for stdin)")
+    p.add_argument("-o", "--output", default="-", help="output file (default: stdout)")
+    p.add_argument(
+        "--on",
+        default="hover",
+        choices=["hover", "click", "hover+?"],
+        help="trigger mode (default: hover)",
+    )
+    p.add_argument(
+        "--wrap",
+        action="store_true",
+        help="walk and wrap mode (visible underline + tab focus)",
+    )
+    p.add_argument(
+        "--data",
+        type=Path,
+        default=_default_data_dir(),
+        help="directory containing simd-tooltips.js + simd-{names,data}.json",
+    )
+    p.add_argument("--quiet", action="store_true", help="suppress the stderr summary")
+    args = p.parse_args(argv)
+
+    # Load inputs.
+    if args.input == "-":
+        html_text = sys.stdin.read()
+        in_label = "<stdin>"
+    else:
+        in_label = args.input
+        html_text = Path(args.input).read_text(encoding="utf-8")
+
+    data_dir: Path = args.data
+    lib_path = data_dir / "simd-tooltips.js"
+    names_path = data_dir / "simd-names.json"
+    data_path = data_dir / "simd-data.json"
+    for q in (lib_path, names_path, data_path):
+        if not q.exists():
+            print(f"error: missing {q}", file=sys.stderr)
+            return 2
+
+    library = lib_path.read_text(encoding="utf-8")
+    names_doc = json.loads(names_path.read_text())
+    data_doc = json.loads(data_path.read_text())
+
+    # Match.
+    visible = collect_text(html_text)
+    all_names = set(names_doc.get("names") or [])
+    referenced = find_referenced_names(visible, all_names)
+    subset_names, subset_data = build_subset(referenced, names_doc, data_doc)
+
+    # Inject.
+    out = inject(html_text, library, subset_names, subset_data, args.on, args.wrap)
+
+    # Write.
+    if args.output == "-":
+        sys.stdout.write(out)
+    else:
+        Path(args.output).write_text(out, encoding="utf-8")
+
+    # Summary on stderr (skip with --quiet, or if writing to stdout we still
+    # log to stderr -- it's a separate stream and pipe-friendly).
+    if not args.quiet:
+        type_count = len(subset_names["types"])
+        intr_count = subset_names["count"] - type_count
+        ambig_count = len(subset_names["ambiguous"])
+        in_size = len(html_text.encode("utf-8"))
+        out_size = len(out.encode("utf-8"))
+        added = out_size - in_size
+        lib_size = len(library.encode("utf-8"))
+        print(
+            f"simd-annotate: in={in_label} ({in_size:,} B)  "
+            f"matched={intr_count} intrinsics + {type_count} types"
+            + (f" ({ambig_count} ambiguous aliases)" if ambig_count else "")
+            + f"   embedded library={lib_size:,} B + data={added - lib_size:,} B"
+            + f"   out={out_size:,} B",
+            file=sys.stderr,
+        )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -27,6 +27,12 @@ See [`simd-tooltip/README.md`](simd-tooltip/README.md) for install
 instructions and [`simd-tooltip/examples/demo.html`](simd-tooltip/examples/demo.html) for a
 working page.
 
+Step 3: a CLI tool [`simd-annotate/`](simd-annotate/README.md) that
+takes an arbitrary HTML file and emits a self-contained, **100%
+offline** HTML page with the library plus only the slice of the
+intrinsic database the page actually references embedded inline. Useful
+for archived posts, e-book exports, intranet docs.
+
 ## Why this doesn't already exist
 
 Surveyed the landscape (see [Existing landscape](#existing-landscape)
