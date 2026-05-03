@@ -9,6 +9,29 @@ Tracking ideas across three states:
 
 Each entry should explain *why* before *what*.
 
+## Contents
+
+**[Considered](#considered)**
+- [Plain-formula explanation per intrinsic (LLM with verifier)](#plain-formula-explanation-per-intrinsic-llm-with-verifier)
+- [Verifier interpreter for upstream pseudocode](#verifier-interpreter-for-upstream-pseudocode)
+- [Cross-arch mapping table (Intel ↔ NEON via simde + sse2neon)](#cross-arch-mapping-table-intel--neon-via-simde--sse2neon)
+- [Per-intrinsic static pages with worked examples](#per-intrinsic-static-pages-with-worked-examples)
+- ["When would I use this?" prose (LLM, second pass)](#when-would-i-use-this-prose-llm-second-pass)
+- [Per-arch sharded data files](#per-arch-sharded-data-files)
+- [Alias resolution UX](#alias-resolution-ux)
+- [Markdown / static-site integrations (build-time subset bundling)](#markdown--static-site-integrations-build-time-subset-bundling)
+- [VS Code extension — v1 polish (post-v0)](#vs-code-extension--v1-polish-post-v0)
+- [Intel arch refinement](#intel-arch-refinement)
+- [SIMD support for RISC-V vector and WebAssembly SIMD](#simd-support-for-risc-v-vector-and-webassembly-simd)
+- [Refresh detection](#refresh-detection)
+- [Search / lookup endpoint](#search--lookup-endpoint)
+
+**[Done](#done)**
+- [VS Code extension (v0)](#vs-code-extension-v0)
+- [Compiler Explorer URL per intrinsic](#compiler-explorer-url-per-intrinsic)
+
+**[Rejected](#rejected)** — *nothing yet*
+
 # Considered
 
 ## Plain-formula explanation per intrinsic (LLM with verifier)
