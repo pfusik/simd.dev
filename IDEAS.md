@@ -3,6 +3,104 @@
 Backlog of improvements that aren't worth doing yet but are worth not
 forgetting. Each entry should explain *why* before *what*.
 
+## Plain-formula explanation per intrinsic (LLM with verifier)
+
+**Why:** upstream pseudocode is uneven — Intel's `<operation>` is mostly
+readable, ARM ASL (`Elem[]`, `bits()`, `for e = 0 to elements-1`) requires
+familiarity. For a tooltip audience the right form is a one-liner like
+`result[i] = (idx[i] < 16) ? t[idx[i]] : 0` plus a short worked example.
+Hand-writing 22k of these doesn't scale; pure-script transformers cover
+~50% of the catalog before the long tail of edge cases (immediates,
+predication, FP rounding, SVE scalable lengths, AES/SHA fixed transforms).
+
+**Sketch:**
+- Build prompt context per intrinsic: signature + description + upstream
+  pseudocode (now in the cache via `cache/arm_operations.json`).
+- LLM produces `{formula, plain_english, example_inputs, example_outputs}`.
+- Pinned model + temperature 0; cache outputs by content-hash
+  (`data/llm-cache/<hash>.json`).
+- Commit the cached outputs to the repo so rebuild is reproducible *up to*
+  cache lookup; cache miss falls through to a re-prompt only when source
+  pseudocode actually changed.
+- See `data/probe_examples.md` for a hand-rendered preview of the target
+  shape on 17 intrinsics across the complexity spectrum.
+
+**Caveats:**
+- ~$50-100 in tokens for a frontier-model batch on the full catalog.
+- Hallucination risk on the long tail. Mitigated by the verifier (next).
+
+## Verifier interpreter for upstream pseudocode
+
+**Why:** the LLM pass above is only as trustworthy as its outputs. A
+small interpreter for Intel's `<operation>` DSL and the ARM ASL subset
+that appears in `operations.json` can run the upstream pseudocode on the
+LLM's claimed example inputs and confirm the LLM's claimed outputs
+agree byte-exact.
+
+**Sketch:**
+- Intel DSL: `:=`, `[hi:lo]` bit slices, `FOR/IF/CASE`, `ZeroExtend*`,
+  `SignExtend*`, `Convert_*_To_*`, plus a stable shortlist of helper
+  functions (about 30-40 to cover all intrinsics). ~2 days to implement.
+- ARM ASL subset: `Elem[]`, `bits(N)`, `for e = 0 to elements-1`,
+  `UInt`, `SInt`, plus `FPRoundInt`/`Saturate`/etc. Limited to forms
+  actually present in `operations.json`. ~4 days.
+- Pipeline: LLM output → run upstream pseudocode in interpreter on
+  `example_inputs` → compare to LLM `example_outputs`. Reject mismatch;
+  re-prompt or fall back to upstream-only display.
+- Verifier coverage gates which entries get the LLM treatment in the
+  shipped DB; the rest fall back to upstream pseudocode verbatim.
+
+## Cross-arch mapping table (Intel ↔ NEON via simde + sse2neon)
+
+**Why:** "what's the NEON equivalent of `_mm_maddubs_epi16`?" is one of
+the most-asked questions in any SIMD walkthrough. The mappings exist in
+permissively-licensed source: simde implements every Intel intrinsic in
+terms of NEON (or scalar fallback); sse2neon is single-header with a
+`perf-tier.md` that ranks each mapping by efficiency (1:1 vs.
+13-instruction emulation). Both MIT.
+
+**Sketch:**
+- `scripts/extract_simde.py` parses `simde/simde/x86/*.h`, builds
+  `data/cross_arch.jsonl` rows: `{intel: "_mm_maddubs_epi16",
+  neon_equivalent: ["vmovl_s8", "vmul_s16", "vaddl_s16"], complexity:
+  "high"}`.
+- Pull sse2neon's `perf-tier.md` for the complexity ranking.
+- Library renders cross-arch hints in the tooltip and on per-intrinsic
+  pages.
+
+**Caveats:** simde is a header library — the mapping isn't a flat table,
+it's the implementation graph. Extraction is real parsing work (~3 days),
+not just a `grep`. Only Intel→NEON; the reverse direction has no equivalent
+1-to-1 library.
+
+## Per-intrinsic static pages with worked examples
+
+**Why:** the tooltip is good for "what does this do?" — but for a full
+walkthrough, readers want a dedicated page per intrinsic with: signature,
+plain-formula, plain-English, worked example, Compiler Explorer link,
+related-intrinsics graph, cross-arch equivalents, performance notes.
+
+**Sketch:**
+- `scripts/build_pages.py` emits `pages/<intrinsic>.html` (or `.md`) per
+  record from the unified DB. ~3 days once the upstream pieces are in.
+- Compiler Explorer URL: deterministic. Template a `#include` + tiny
+  function that calls the intrinsic, encode-base64 into a CE
+  `clientstate=` URL. ~1 day; ships for all 22k.
+- Worked-example numbers from native execution: write a tiny C program
+  per intrinsic with canonical inputs, compile, run (native or QEMU
+  cross-arch), capture the output. Deterministic, ~1-2 weeks for full
+  coverage; ~1 week if capped at the easy 70%.
+
+## "When would I use this?" prose (LLM, second pass)
+
+**Why:** the most-requested educational content isn't pseudocode, it's
+"why does this exist? when would I reach for it instead of X?". Domain
+reasoning that isn't in any upstream source.
+
+**Sketch:** second LLM pass after the formula pass; same caching
+discipline. Verification is harder (no ground-truth oracle for "is this
+the right tool for this job?"); manual spot-check 1-5% of outputs.
+
 ## Per-arch sharded data files
 
 **Why:** today the library lazy-fetches one ~9 MB JSON (~450 KB gzipped)
