@@ -60,16 +60,59 @@ _PSEUDOCODE_PLACEHOLDERS = {
     "no operation information",
 }
 
+# Normalization passes applied to pseudocode *before* hashing. The intent is
+# to strip variation that's purely a function of the intrinsic's type/width
+# parameter, so e.g. svabalt_n_u{16,32,64} (which differ only by the cast in
+# the prose) cluster together.
+#
+# Be conservative: only normalize patterns that are clearly type/width
+# substitutions. Wider normalization (collapsing signed vs unsigned,
+# stripping all-numeric tokens, …) risks merging genuinely different ops.
+
+# `int{8,16,32,64,128}_t` / `uint*_t` / `float*_t` / `bfloat*_t` /
+# `mfloat*_t` / `poly*_t`  →  `<TYPE>_t`. Collapses ALL type kinds (signed,
+# unsigned, float, bfloat, poly, mfloat) into one placeholder so siblings
+# whose pseudocode is character-identical except for the type cast cluster
+# together. Ops where signed/unsigned have genuinely different pseudocode
+# bodies (e.g. arithmetic vs. logical shift) will still split because their
+# bodies differ outside the cast.
+_NORM_TYPE_TOK = re.compile(r"\b(?:u?int|b?float|mfloat|poly)(?:8|16|32|64|128)(_t)\b")
+
+# ARM SVE prose appends footnotes (`[1] This is true if …`, `[2] If instead
+# result is in a different register …`) that are pure documentation noise
+# and vary across siblings. Drop everything from the first `[N]` marker.
+_NORM_FOOTNOTES = re.compile(r"\[\d+\].*$", re.DOTALL)
+
+# ARM SVE prose for signed integer ops also appends "The operation uses
+# modulo arithmetic. … no undefined behavior for signed overflow." which is
+# a fixed phrase that doesn't appear on unsigned siblings. Drop it so a
+# signed-op cluster can join its unsigned counterpart when nothing else
+# differs in the prose.
+_NORM_MODULO = re.compile(
+    r"The operation uses modulo arithmetic\.[^.]*?signed overflow\.\s*",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _normalize_pseudocode(pc: str) -> str:
+    pc = _NORM_FOOTNOTES.sub("", pc)
+    pc = _NORM_MODULO.sub("", pc)
+    pc = _NORM_TYPE_TOK.sub(r"<TYPE>\1", pc)
+    return pc.strip()
+
 
 def pseudocode_hash(pc: str) -> str:
     """Stable cluster key for an intrinsic's upstream pseudocode.
 
     ARM ASL is heavily abstract (uses `Elem[...]`, `esize`, `elements`)
     so type/width variants of the same operation share an identical
-    pseudocode string and naturally land in the same cluster. Intel's
-    `<operation>` mentions specific bit widths, so the same hash only
-    catches Intel siblings that share a width (e.g. mask-/unmasked
-    pairs); cross-width Intel clustering would need a normalization
+    pseudocode string and naturally land in the same cluster. ARM SVE
+    English prose embeds explicit type tokens (`(uint16_t)`) and footnote
+    markers — _normalize_pseudocode strips those before hashing so
+    type/width siblings cluster.
+
+    Intel's `<operation>` mentions specific bit widths and lane counts;
+    cross-width Intel clustering would need a more aggressive normalization
     pass and is left for the LLM-cluster idea in IDEAS.md.
 
     A short SHA1 prefix is plenty for ~22k records.
@@ -79,6 +122,7 @@ def pseudocode_hash(pc: str) -> str:
     cleaned = pc.strip()
     if cleaned.lower() in _PSEUDOCODE_PLACEHOLDERS:
         return ""
+    cleaned = _normalize_pseudocode(cleaned)
     return hashlib.sha1(cleaned.encode("utf-8")).hexdigest()[:12]
 
 
