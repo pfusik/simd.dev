@@ -1,0 +1,30 @@
+# Cloudflare Pages reads this file at the deploy root. Sets per-path
+# cache headers for the static assets we ship.
+#
+# We deploy frequently, and our asset filenames are NOT fingerprinted
+# (app.js stays "app.js" across deploys). With Pages' default
+# `max-age=14400, must-revalidate`, browsers serve a stale local copy
+# for up to 4 hours after a new push lands -- a fresh visit can show
+# the old app.js against the new HTML, which silently breaks the page.
+#
+# Setting `no-cache` on these assets forces the browser to revalidate
+# with the CDN on every request. CF still serves a cached response if
+# nothing changed (via ETag), so the data cost is unchanged in steady
+# state, but a deploy is picked up immediately.
+
+/app.js
+  Cache-Control: public, no-cache, must-revalidate
+
+/styles.css
+  Cache-Control: public, no-cache, must-revalidate
+
+/index.html
+  Cache-Control: public, no-cache, must-revalidate
+
+/
+  Cache-Control: public, no-cache, must-revalidate
+
+# The dist/ artifacts (the simd-tooltips library + the data files) also
+# regenerate on every deploy. Same treatment.
+/dist/*
+  Cache-Control: public, no-cache, must-revalidate
