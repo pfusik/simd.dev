@@ -1,5 +1,10 @@
 # simd.dev
 
+> # 🚧 WIP — work in progress 🚧
+>
+> Schema, layout, and APIs are still moving. Expect breaking changes
+> until this notice is removed.
+
 A collection of data and tools related to SIMD intrinsics.
 
 Contains:

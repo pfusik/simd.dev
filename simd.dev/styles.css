@@ -27,6 +27,25 @@ html, body {
 
 body { max-width: 880px; margin: 0 auto; padding: 0 1.25rem 4rem; }
 
+/* WIP banner -- very obvious top-of-page strip until the project stabilizes. */
+.wip-banner {
+    margin: 1rem -1.25rem 0;
+    padding: 0.7rem 1.25rem;
+    background: repeating-linear-gradient(
+        45deg,
+        #fff4cc,
+        #fff4cc 14px,
+        #ffe89a 14px,
+        #ffe89a 28px
+    );
+    border-top: 3px solid #d09a3a;
+    border-bottom: 3px solid #d09a3a;
+    color: #5b430b;
+    font-size: 0.95rem;
+    text-align: center;
+}
+.wip-banner strong { color: #3d2a00; font-weight: 700; letter-spacing: 0.01em; }
+
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
