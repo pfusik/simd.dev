@@ -63,6 +63,7 @@
   // ---------------------------------------------------------------------
   let cfg = null;
   let nameSet = null;            // Set<string> for O(1) token lookup
+  let typeSet = null;            // Set<string> -- subset of names that are SIMD types
   let ambiguous = null;          // {alias: [canonical, ...]}
   let records = null;            // {name: record} -- lazy
   let dataPromise = null;        // Promise<records> in flight
@@ -110,6 +111,7 @@
       namesDoc = await fetchJSON(cfg.namesUrl);
     }
     nameSet = new Set(namesDoc.names || []);
+    typeSet = new Set(namesDoc.types || []);
     ambiguous = namesDoc.ambiguous || {};
 
     // Data: defer. If pre-supplied, use immediately.
@@ -408,10 +410,15 @@
       let cursor = 0;
       for (const h of hits) {
         if (h.start > cursor) frag.appendChild(document.createTextNode(text.slice(cursor, h.start)));
+        const isType = typeSet.has(h.name);
         const span = document.createElement('span');
-        span.className = cfg.wrapClass;
+        // Both kinds keep `cfg.wrapClass` so the existing event handlers and
+        // detach paths still work. Types add a `simd-type` modifier class for
+        // distinct styling and are NOT tabbable -- intrinsics are the primary
+        // navigation target; types are reference info.
+        span.className = isType ? (cfg.wrapClass + ' simd-type') : cfg.wrapClass;
         span.dataset.name = h.name;
-        span.tabIndex = 0;
+        if (!isType) span.tabIndex = 0;
         span.textContent = h.name;
         frag.appendChild(span);
         cursor = h.end;
@@ -485,6 +492,9 @@
   // ---------------------------------------------------------------------
   async function showAtRect(name, rect) {
     const tip = ensureTooltip();
+    // Pre-mark the tooltip as a type if we know it before the data loads, so
+    // the placeholder is already coloured correctly.
+    tip.classList.toggle('simd-tooltip--type', !!(typeSet && typeSet.has(name)));
     tip.innerHTML = renderPlaceholder(name);
     tip.style.visibility = 'hidden';
     tip.style.display = 'block';
@@ -497,6 +507,7 @@
       if (activeKey == null) return;
       const rec = recordsMap[name];
       const ambig = ambiguous[name];
+      tip.classList.toggle('simd-tooltip--type', !!(rec && rec.kind === 'type'));
       tip.innerHTML = renderTooltip(name, rec, ambig);
       positionAtRect(tip, rect);
     } catch (e) {
@@ -686,6 +697,13 @@
       cursor: help;
       border-bottom: 1px dashed currentColor;
     }
+    /* SIMD types: visually distinct from intrinsics, and excluded from the
+       Tab order (no tabindex set in the wrapper). Use a thinner dotted
+       underline in an amber tone -- mirrors the type tag in the tooltip. */
+    .simd-intrinsic.simd-type {
+      cursor: help;
+      border-bottom: 1px dotted #d09a3a;
+    }
     /* Show the focus indicator on any focus -- click *and* keyboard tab --
        so the user can see which intrinsic is currently the active target. */
     .simd-intrinsic:focus {
@@ -708,6 +726,13 @@
       font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       pointer-events: auto;
     }
+    /* Warmer tint for SIMD-type tooltips so the kind is recognizable at a glance. */
+    .simd-tooltip.simd-tooltip--type {
+      background: #2a2418;
+      border-color: #5a4a2a;
+    }
+    .simd-tooltip.simd-tooltip--type .simd-tt-head code { color: #ffc977; }
+    .simd-tooltip.simd-tooltip--type .simd-tt-typedef { background: #1a1610; color: #e8d8b8; }
     .simd-tooltip code, .simd-tooltip pre {
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       font-size: 12.5px;

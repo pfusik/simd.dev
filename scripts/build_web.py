@@ -284,12 +284,13 @@ def main():
     # never collide with intrinsic names (different namespaces), but if anything
     # ever does, intrinsics win.
     types = extract_types(SRC)
-    type_count = 0
+    type_names: list[str] = []
     for tname, trec in types.items():
         if tname in records:
             continue
         records[tname] = trec
-        type_count += 1
+        type_names.append(tname)
+    type_count = len(type_names)
 
     # The names index = every key the matcher should treat as "look this up".
     # That is: canonicals + non-ambiguous aliases + ambiguous aliases (so the matcher
@@ -300,6 +301,7 @@ def main():
         "version": 1,
         "count": len(names),
         "names": names,
+        "types": sorted(type_names),     # subset of names that are SIMD types
         "ambiguous": ambiguous_aliases,
     }
     data_doc = {
