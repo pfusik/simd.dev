@@ -112,13 +112,17 @@ function formatHover(name, rec, config) {
         md.appendCodeblock(rec.pseudocode);
     }
 
-    // Upstream docs link.
+    // Footer links: upstream docs + Compiler Explorer.
+    const links = [];
     if (rec.doc_url) {
-        const label = rec.source === 'arm-acle'
-            ? 'Arm developer docs'
-            : 'Intel Intrinsics Guide';
-        md.appendMarkdown(`\n[${label} →](${rec.doc_url})\n`);
+        const label = rec.source === 'arm-acle' ? 'Arm developer docs' : 'Intel Intrinsics Guide';
+        links.push(`[${label} →](${rec.doc_url})`);
     }
+    const ceUrl = compilerExplorerUrl(rec);
+    if (ceUrl) {
+        links.push(`[Compiler Explorer →](${ceUrl})`);
+    }
+    if (links.length) md.appendMarkdown('\n' + links.join(' · ') + '\n');
 
     // Attribution footer.
     md.appendMarkdown(
@@ -127,6 +131,136 @@ function formatHover(name, rec, config) {
     );
 
     return md;
+}
+
+// ---------------------------------------------------------------------------
+// Compiler Explorer URL builder
+//
+// Same logic as simd-tooltips.js (web library) -- duplicated here because the
+// extension can't pull in that file at runtime. If we ever factor it into a
+// shared module, both surfaces would call the same code.
+// ---------------------------------------------------------------------------
+
+const CE_INTEL_FLAGS = {
+    'MMX': '-mmmx', 'SSE': '-msse', 'SSE2': '-msse2', 'SSE3': '-msse3',
+    'SSSE3': '-mssse3', 'SSE4.1': '-msse4.1', 'SSE4.2': '-msse4.2',
+    'AVX': '-mavx', 'AVX2': '-mavx2',
+    'FMA': '-mfma', 'AES': '-maes', 'SHA': '-msha', 'SHA512': '-msha512',
+    'BMI1': '-mbmi', 'BMI2': '-mbmi2', 'POPCNT': '-mpopcnt',
+    'F16C': '-mf16c', 'GFNI': '-mgfni', 'VAES': '-mvaes',
+    'VPCLMULQDQ': '-mvpclmulqdq', 'PCLMULQDQ': '-mpclmul',
+    'AVX512F': '-mavx512f', 'AVX512VL': '-mavx512vl',
+    'AVX512BW': '-mavx512bw', 'AVX512DQ': '-mavx512dq',
+    'AVX512CD': '-mavx512cd', 'AVX512_BF16': '-mavx512bf16',
+    'AVX512_FP16': '-mavx512fp16', 'AVX512_VBMI': '-mavx512vbmi',
+    'AVX512_VBMI2': '-mavx512vbmi2', 'AVX512_VNNI': '-mavx512vnni',
+    'AVX512_BITALG': '-mavx512bitalg', 'AVX512VPOPCNTDQ': '-mavx512vpopcntdq',
+    'AVX512IFMA52': '-mavx512ifma', 'AVX512_VP2INTERSECT': '-mavx512vp2intersect',
+    'AVX_VNNI': '-mavxvnni', 'AVX_VNNI_INT8': '-mavxvnniint8',
+    'AVX_VNNI_INT16': '-mavxvnniint16', 'AVX_IFMA': '-mavxifma',
+    'AVX_NE_CONVERT': '-mavxneconvert',
+};
+
+// See the same struct in simd-tooltip/dist/simd-tooltips.js for the full
+// rationale on the headers, marches, and the +fp16+bf16+... extension list.
+const ARM_EXT = '+fp16+bf16+i8mm+dotprod+crypto';
+const CE_ARM_ARCHS = {
+    'Neon':         { compiler: 'armv8-full-cclang-trunk', march: 'armv8.6-a' + ARM_EXT,                                       headers: ['arm_neon.h', 'arm_fp16.h', 'arm_bf16.h'] },
+    'SVE':          { compiler: 'armv8-full-cclang-trunk', march: 'armv8.6-a+sve' + ARM_EXT,                                   headers: ['arm_sve.h', 'arm_neon_sve_bridge.h'] },
+    'SVE2':         { compiler: 'armv8-full-cclang-trunk', march: 'armv9-a' + ARM_EXT,                                         headers: ['arm_sve.h', 'arm_neon_sve_bridge.h'] },
+    'SME and SME2': { compiler: 'armv8-full-cclang-trunk', march: 'armv9.2-a+sme2+sme-i16i64+sme-f64f64' + ARM_EXT,             headers: ['arm_sve.h', 'arm_sme.h', 'arm_neon_sve_bridge.h'] },
+    'Helium':       { compiler: 'armv7-cclang-trunk',      march: 'armv8.1-m.main+mve.fp+fp.dp',                                headers: ['arm_mve.h', 'arm_fp16.h', 'arm_bf16.h'] },
+};
+const CE_ARM_ARCH_ORDER = ['Neon', 'Helium', 'SVE', 'SVE2', 'SME and SME2'];
+
+function ceParseSignature(def) {
+    if (!def) return null;
+    const flat = def.replace(/\s+/g, ' ').trim();
+    const open = flat.indexOf('(');
+    const close = flat.lastIndexOf(')');
+    if (open < 0 || close < 0 || close < open) return null;
+    const head = flat.slice(0, open).trim();
+    const paramStr = flat.slice(open + 1, close).trim();
+    const headParts = head.split(/\s+/);
+    const name = headParts.pop();
+    const returnType = headParts.join(' ');
+    if (!paramStr || paramStr === 'void') {
+        return { returnType, name, params: 'void', argList: '' };
+    }
+    const params = paramStr.split(',').map(p => p.trim());
+    const argNames = params.map(p => {
+        if (/\bconst\s+int\b/.test(p) && !/\*/.test(p)) return '0';
+        const m = p.match(/([A-Za-z_]\w*)\s*$/);
+        return m ? m[1] : '0';
+    });
+    return { returnType, name, params: paramStr, argList: argNames.join(', ') };
+}
+
+function ceConfigFor(rec) {
+    if (!rec || rec.kind === 'type') return null;
+    if (rec.source === 'arm-acle') {
+        const fset = new Set(rec.family || []);
+        for (const archKey of CE_ARM_ARCH_ORDER) {
+            if (fset.has(archKey)) {
+                const a = CE_ARM_ARCHS[archKey];
+                return {
+                    compiler: a.compiler,
+                    options: `-O2 -march=${a.march}`,
+                    headers: a.headers,
+                };
+            }
+        }
+        return null;
+    }
+    if (rec.source === 'intel-iguide') {
+        const flags = [];
+        for (const f of rec.family || []) {
+            const flag = CE_INTEL_FLAGS[f];
+            if (flag && flags.indexOf(flag) < 0) flags.push(flag);
+        }
+        if (flags.length === 0) flags.push('-mavx2');
+        return {
+            compiler: 'cclang_trunk',
+            options: '-O2 ' + flags.join(' '),
+            headers: ['immintrin.h'],
+        };
+    }
+    return null;
+}
+
+function compilerExplorerUrl(rec) {
+    const cfg = ceConfigFor(rec);
+    if (!cfg) return null;
+    const sig = ceParseSignature(rec.definition);
+    if (!sig) return null;
+
+    const includes = cfg.headers.map(h => `#include <${h}>`).join('\n');
+    const source =
+        `${includes}\n\n` +
+        `${sig.returnType} example(${sig.params}) {\n` +
+        `    return ${sig.name}(${sig.argList});\n` +
+        `}\n`;
+
+    const state = {
+        sessions: [{
+            id: 1,
+            language: 'c',
+            source: source,
+            compilers: [{
+                id: cfg.compiler,
+                options: cfg.options,
+                libs: [],
+                filters: {
+                    binary: false, commentOnly: true, demangle: true, directives: true,
+                    execute: false, intel: true, labels: true, libraryCode: false, trim: true,
+                },
+            }],
+        }],
+        version: 4,
+    };
+    const utf8 = Buffer.from(JSON.stringify(state), 'utf8').toString('base64');
+    const safe = utf8.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    return 'https://godbolt.org/clientstate/' + safe;
 }
 
 module.exports = { activate, deactivate };

@@ -162,9 +162,18 @@
         const linkLabel = rec.source === 'arm-acle'
             ? 'Arm developer docs →'
             : 'Intel Intrinsics Guide →';
-        const link = rec.doc_url
-            ? `<a class="upstream-link" href="${escapeAttr(rec.doc_url)}" target="_blank" rel="noopener">${linkLabel}</a>`
-            : '';
+        const links = [];
+        if (rec.doc_url) {
+            links.push(`<a class="upstream-link" href="${escapeAttr(rec.doc_url)}" target="_blank" rel="noopener">${linkLabel}</a>`);
+        }
+        // Compiler Explorer link, computed via the simd-tooltips library helper.
+        const ceUrl = (window.SimdTooltips && window.SimdTooltips.compilerExplorerUrl)
+            ? window.SimdTooltips.compilerExplorerUrl(rec)
+            : null;
+        if (ceUrl) {
+            links.push(`<a class="upstream-link" href="${escapeAttr(ceUrl)}" target="_blank" rel="noopener">Compiler Explorer →</a>`);
+        }
+        const link = links.length ? `<div class="upstream-links">${links.join(' &middot; ')}</div>` : '';
 
         const desc = rec.description
             ? `<div class="description">${escapeHtml(rec.description)}</div>`
