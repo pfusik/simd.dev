@@ -4,26 +4,27 @@ A collection of data and tools related to SIMD intrinsics.
 
 Contains:
 
-- **[data](data/)** unified intrinsic database in [`data/intrinsics.jsonl`](data/intrinsics.jsonl) —
+- **[data](data/)** - A unified intrinsic database in [`data/intrinsics.jsonl`](data/intrinsics.jsonl) -
 21,484 records spanning ARM (NEON / Helium / SVE / SVE2 / SME) and Intel (MMX / SSE* / AVX /
 AVX2 / AVX-512 / AMX / etc.).  See [`data/README.md`](data/README.md)
 for schema, provenance, and rebuild instructions.
 **Generated automatically from upstream sources** (ARM ACLE, Intel Intrinsics Guide XML,
 LLVM clang headers); pure stdlib Python, no LLM in the loop.
 
-- **[simd-tooltip](simd-tooltip/) - drop-in JS tooltip library in
-— one `<script>` tag adds
+- **[simd-tooltip](simd-tooltip/)** - Drop-in JS tooltip library.
+One `<script>` tag adds
 hover (or click, or hover-with-`?`-badge) tooltips to any HTML page,
 detecting intrinsic names in text without touching the DOM by default.
 See [`simd-tooltip/README.md`](simd-tooltip/README.md) for install
 instructions and [`simd-tooltip/examples/demo.html`](simd-tooltip/examples/demo.html) for a
 working page.
 
-- a CLI tool [`simd-annotate/`](simd-annotate/README.md) that
+- **[simd-annotate](simd-annotate/)** - A CLI that
 takes an arbitrary HTML file and emits a self-contained, **100%
 offline** HTML page with the library plus only the slice of the
 intrinsic database the page actually references embedded inline. Useful
 for archived posts, e-book exports, intranet docs.
+See [an example with annotations](simd-annotate/examples/sample.annotated.html)
 
 ## Why?
 
@@ -38,12 +39,6 @@ Sunday afternoon.
 One motivation was the tooltips in Compiler Explorer — but those are only for
 the generated assembly, not for the C/C++ source side.
 
-Note: I also found simd.info — it's a great resource with much deeper info,
-but it's not open and doesn't provide the tooling I wanted. The depth there
-(especially in the paid version, from the screenshots) is impressive; if your
-goal is reference-grade reading rather than embedding tooltips in your own
-docs, that's a better fit.
-
 Related projects:
 - **[Compiler Explorer](https://godbolt.org/) (godbolt)** has rich hover tooltips
   on the *assembly* side (its [`asm-docs/`](https://github.com/compiler-explorer/compiler-explorer/tree/main/lib/asm-docs)
@@ -51,14 +46,10 @@ Related projects:
   On the C/C++ source side it has none of its own — and it's a full IDE-style
   app, not a static doc renderer in any case.
 - **clangd** (LSP) shows hover info in your IDE — editor-only, not exportable
-  to HTML. Coverage is uneven: rich Doxygen for AVX/AVX2/FMA and most SSE
-  (~15% of the Intel catalog), but only the bare signature for AVX-512 and
-  for nearly all of ARM NEON / SVE / SME (the auto-generated ARM headers
-  ship without prose).
+  to HTML, coverage is uneven.
 - **[Intel's Intrinsics Guide](https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html)**
   — the reference everyone uses for browsing, with rich descriptions and
-  pseudocode. JavaScript app though; you can't embed its tooltips on
-  third-party content. Our DB pulls signatures, ISA flags, and pseudocode
+  pseudocode. Our DB pulls signatures, ISA flags, and pseudocode
   from the same XML it's built on.
 - **simd.info** — seems to be a very rich and deep database with a different
   focus (reference reading rather than tooltip embedding). Not open.
