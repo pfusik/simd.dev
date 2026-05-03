@@ -3,6 +3,7 @@
 
 Inputs (from cache/):
   - arm_intrinsics.json     (ARM ACLE, CC-BY-SA-4.0 + patent grant)
+  - arm_operations.json     (ARM ASL pseudocode, same license; optional)
   - intel_intrinsics.xml    (Intel Intrinsics Guide; only factual fields are kept)
   - llvm_descriptions.json  (mined from clang headers, Apache-2.0-WITH-LLVM-exception)
 
@@ -17,7 +18,8 @@ Record schema:
   family       list[str]    SIMD family/version tags (NEON, SVE, SVE2, SME, MVE, SSE2, AVX2, AVX512F, ...)
   definition   str          C signature, e.g. "int8x8_t vadd_s8(int8x8_t a, int8x8_t b)"
   description  str          short prose headline (may be empty)
-  desc_source  str          where the description came from: "arm-acle" | "llvm" | "synth" | ""
+  desc_source  str          where the description came from: "arm-acle" | "llvm" | "intel-iguide" | "synth" | ""
+  pseudocode   str          upstream pseudocode (Intel <operation> or ARM ASL); may be empty
   source       str          upstream provenance: "arm-acle" | "intel-iguide"
 
 Description sources (asymmetric due to licensing):
@@ -104,10 +106,48 @@ def arm_signature(entry: dict, name: str) -> str:
     return f"{rt_value} {name}(\n    {inner})"
 
 
+_ARM_HTML_TAG = re.compile(r"<[^>]+>")
+_ARM_HTML_LINK = re.compile(r'<a [^>]*>([^<]*)</a>')
+_ARM_HEADING = re.compile(r'<h\d>[^<]*</h\d>')
+
+
+def _arm_strip_html(s: str) -> str:
+    """Strip HTML tags from ARM operations content, keeping link text. The
+    upstream is HTML-wrapped ASL pseudocode with a leading <h4>Operation</h4>
+    heading and cross-references to the ARM ARM. Drop the heading entirely
+    (it's an artifact of the rendered docs page) and keep the readable text."""
+    if not s:
+        return ""
+    s = _ARM_HEADING.sub("", s)              # drop <h4>Operation</h4>
+    s = _ARM_HTML_LINK.sub(r"\1", s)         # keep link text
+    s = _ARM_HTML_TAG.sub("", s)             # drop everything else
+    # Decode the few entities ARM actually uses.
+    s = s.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&").replace("&nbsp;", " ")
+    return s.strip()
+
+
+def _arm_load_operations() -> dict[str, str]:
+    """Load cache/arm_operations.json (when present) and return a map
+    {operation_id: stripped_text}. Missing file is OK -- pseudocode is
+    optional, the rest of the DB still builds."""
+    src = CACHE / "arm_operations.json"
+    if not src.exists():
+        return {}
+    raw = json.loads(src.read_text())
+    out: dict[str, str] = {}
+    for entry in raw:
+        item = entry.get("item") if isinstance(entry, dict) else None
+        if not item:
+            continue
+        out[item["id"]] = _arm_strip_html(item.get("content", ""))
+    return out
+
+
 def arm_records():
     src = CACHE / "arm_intrinsics.json"
     with src.open() as f:
         entries = json.load(f)
+    op_text = _arm_load_operations()
 
     for e in entries:
         archs_raw = e.get("Architectures") or []
@@ -115,6 +155,8 @@ def arm_records():
         family = sorted(set(e.get("SIMD_ISA") or []))
         name, aliases = arm_names(e["name"])
         desc = shorten(e.get("description") or "")
+        op_id = e.get("Operation")
+        pseudocode = op_text.get(op_id, "") if op_id else ""
         yield {
             "intrinsic": name,
             "aliases": aliases,
@@ -123,6 +165,7 @@ def arm_records():
             "definition": arm_signature(e, name),
             "description": desc,
             "desc_source": "arm-acle" if desc else "",
+            "pseudocode": pseudocode,
             "source": "arm-acle",
         }
 
@@ -209,6 +252,8 @@ def intel_records():
                 desc = shorten(synth_intel_description(intr))
                 desc_source = "synth" if desc else ""
 
+        pseudocode = (intr.findtext("operation") or "").strip()
+
         yield {
             "intrinsic": name,
             "aliases": [],
@@ -217,6 +262,7 @@ def intel_records():
             "definition": intel_signature(intr),
             "description": desc,
             "desc_source": desc_source,
+            "pseudocode": pseudocode,
             "source": "intel-iguide",
         }
 
@@ -235,6 +281,7 @@ def main():
     arch_counter = Counter()
     source_counter = Counter()
     desc_source_counter = Counter()
+    pseudocode_counter = Counter()
     by_source_family = {"arm-acle": Counter(), "intel-iguide": Counter()}
 
     with out_path.open("w") as out:
@@ -244,6 +291,8 @@ def main():
                 n += 1
                 source_counter[rec["source"]] += 1
                 desc_source_counter[rec.get("desc_source") or "(none)"] += 1
+                if rec.get("pseudocode"):
+                    pseudocode_counter[rec["source"]] += 1
                 for f in rec["family"]:
                     family_counter[f] += 1
                     by_source_family[rec["source"]][f] += 1
@@ -255,6 +304,7 @@ def main():
         "by_source": dict(source_counter),
         "by_arch": dict(arch_counter),
         "by_desc_source": dict(desc_source_counter),
+        "with_pseudocode": dict(pseudocode_counter),
         "by_family": dict(family_counter.most_common()),
         "by_source_family": {k: dict(v.most_common()) for k, v in by_source_family.items()},
     }
@@ -267,6 +317,7 @@ def main():
     print("by_source:     ", dict(source_counter))
     print("by_arch:       ", dict(arch_counter))
     print("by_desc_source:", dict(desc_source_counter))
+    print("with_pseudocode:", dict(pseudocode_counter))
     print("top families:")
     for f, c in family_counter.most_common(15):
         print(f"  {c:6d}  {f}")

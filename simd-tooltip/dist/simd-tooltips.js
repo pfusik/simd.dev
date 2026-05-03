@@ -624,9 +624,14 @@
         ${link}`;
     }
 
+    const pseudocode = rec.pseudocode
+      ? `<details class="simd-tt-pc"><summary>pseudocode</summary><pre>${escapeHtml(rec.pseudocode)}</pre></details>`
+      : '';
+
     return `<div class="simd-tt-head"><code>${escapeHtml(name)}</code> ${families} ${archs}</div>
       <pre class="simd-tt-sig">${escapeHtml(rec.definition || '')}</pre>
       ${desc}
+      ${pseudocode}
       ${link}`;
   }
 
@@ -750,6 +755,35 @@
     .simd-tt-foot a:hover { text-decoration: underline; }
     .simd-tt-loading { color: #888; }
     .simd-tt-error { color: #ff7b7b; }
+    /* Upstream pseudocode: collapsed by default to keep the tooltip compact;
+       expandable for power readers. */
+    .simd-tt-pc { margin-top: 6px; }
+    .simd-tt-pc > summary {
+      cursor: pointer;
+      font-size: 11.5px;
+      color: #8fb6ff;
+      list-style: none;
+      user-select: none;
+    }
+    .simd-tt-pc > summary::-webkit-details-marker { display: none; }
+    .simd-tt-pc > summary::before {
+      content: '▸ ';
+      color: #8fb6ff;
+      font-size: 10px;
+    }
+    .simd-tt-pc[open] > summary::before { content: '▾ '; }
+    .simd-tt-pc > pre {
+      margin: 4px 0 0 0;
+      padding: 6px 8px;
+      max-height: 280px;
+      overflow: auto;
+      background: #131722;
+      border-radius: 4px;
+      color: #cfd2dc;
+      white-space: pre-wrap;
+      font-size: 11.5px;
+      line-height: 1.4;
+    }
     .simd-hint {
       position: absolute;
       display: none;

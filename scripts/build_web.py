@@ -259,6 +259,7 @@ def main():
                 "family": r["family"],
                 "definition": r["definition"],
                 "description": shorten(r.get("description", "")),
+                "pseudocode": r.get("pseudocode", ""),
                 "source": r["source"],
                 "doc_url": doc_url(name, r["source"]),
             }

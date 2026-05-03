@@ -16,6 +16,10 @@
     "intel-iguide": 6150,
     "llvm": 996
   },
+  "with_pseudocode": {
+    "arm-acle": 10384,
+    "intel-iguide": 7007
+  },
   "by_family": {
     "SME and SME2": 6380,
     "Neon": 4344,
