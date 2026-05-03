@@ -1,0 +1,40 @@
+This database (data/intrinsics.jsonl) is built from the following upstream
+sources; their attributions and license terms apply to the corresponding
+records.
+
+----------------------------------------------------------------------------
+ARM ACLE intrinsics
+  Upstream:  https://developer.arm.com/architectures/instruction-sets/intrinsics/data/intrinsics.json
+  Repo:      https://github.com/ARM-software/acle
+  License:   CC-BY-SA-4.0 with an additional patent grant.
+  Copyright: 2014-2025 Arm Limited and/or its affiliates
+             <open-source-office@arm.com>
+             2021 Matt P. Dziubinski <matdzb@gmail.com>
+  Applies to: every record with desc_source == "arm-acle".
+
+  Per CC-BY-SA-4.0, derived works (this database, and any further work that
+  embeds it) must be distributed under the same license, with attribution
+  to Arm and a link back to the original specification.
+
+----------------------------------------------------------------------------
+LLVM clang x86 intrinsic header descriptions
+  Upstream:  https://github.com/llvm/llvm-project/tree/main/clang/lib/Headers
+  License:   Apache License v2.0 with LLVM Exceptions
+             SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+  Copyright: The LLVM Project contributors.
+  Applies to: every record with desc_source == "llvm". Description text is
+              the first paragraph of the per-intrinsic Doxygen comment.
+
+----------------------------------------------------------------------------
+Intel Intrinsics Guide
+  Upstream:  https://www.intel.com/content/dam/develop/public/us/en/include/intrinsics-guide/data-latest.xml
+  Copyright: Intel Corporation. The Intrinsics Guide does not carry an open
+             license; Intel publishes it as developer reference material.
+  Applies to: every record with desc_source == "intel-iguide" or source ==
+              "intel-iguide". For records sourced from this XML we keep
+              only short factual fields (name, signature, CPUID, category,
+              instruction, plus the first sentence of <description>) to
+              minimize use of creative expression.
+
+  If you redistribute this database, also link to Intel's Intrinsics Guide
+  and consider checking with Intel for any redistribution constraints.

@@ -1,0 +1,18 @@
+# Upstream raw data — fetched by scripts/, large, re-derivable, and
+# Intel's XML in particular has unclear redistribution terms. Never commit.
+cache/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+*.swp
+*.swo
+.idea/
+.vscode/
