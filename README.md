@@ -5,13 +5,15 @@
 > Schema, layout, and APIs are still moving. Expect breaking changes
 > until this notice is removed.
 
-A collection of data and tools related to SIMD intrinsics.
+A collection of data and tools related to SIMD intrinsics **and SIMD vector data types**
+(`__m256i`, `int8x16_t`, `svfloat32_t`, `__mmask8`, `svbool_t`, …).
 
 Contains:
 
-- **[data](data/)** - A unified intrinsic database in [`data/intrinsics.jsonl`](data/intrinsics.jsonl) -
-21,484 records spanning ARM (NEON / Helium / SVE / SVE2 / SME) and Intel (MMX / SSE* / AVX /
-AVX2 / AVX-512 / AMX / etc.).  See [`data/README.md`](data/README.md)
+- **[data](data/)** - A unified intrinsic + type database in
+[`data/intrinsics.jsonl`](data/intrinsics.jsonl) — **21,484 intrinsic records + 208 SIMD type
+records** spanning ARM (NEON / Helium / SVE / SVE2 / SME) and Intel
+(MMX / SSE* / AVX / AVX2 / AVX-512 / AMX / etc.).  See [`data/README.md`](data/README.md)
 for schema, provenance, and rebuild instructions.
 **Generated automatically from upstream sources** (ARM ACLE, Intel Intrinsics Guide XML,
 LLVM clang headers); pure stdlib Python, no LLM in the loop.

@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>simd.dev — SIMD intrinsics, with tooltips</title>
-<meta name="description" content="An open database of ARM and Intel SIMD intrinsics, plus drop-in tooltip tooling for any HTML page, a CLI to bake offline annotations, and a VS Code extension.">
+<title>simd.dev — SIMD intrinsics &amp; types, with tooltips</title>
+<meta name="description" content="An open database of ARM and Intel SIMD intrinsics and SIMD vector types, plus drop-in tooltip tooling for any HTML page, a CLI to bake offline annotations, and a VS Code extension.">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -15,7 +15,7 @@
 
 <header class="hero">
   <h1>simd.dev</h1>
-  <p class="tagline">An open database of SIMD intrinsics, with drop-in tooltip tooling for the web, the terminal, and your editor.</p>
+  <p class="tagline">An open database of SIMD <strong>intrinsics</strong> <em>and</em> <strong>vector data types</strong>, with drop-in tooltip tooling for the web, the terminal, and your editor.</p>
 
   <div class="cta">
     <a class="btn primary" href="https://github.com/MarcinZukowski/simd.dev" target="_blank" rel="noopener">View on GitHub →</a>
@@ -23,12 +23,13 @@
 </header>
 
 <section class="search">
-  <h2>Search intrinsics</h2>
-  <p class="muted">Type any part of a name. Try
+  <h2>Search intrinsics &amp; types</h2>
+  <p class="muted">Type any part of a name — intrinsic <em>or</em> SIMD vector type. Try
     <code data-q="_mm256_add">_mm256_add</code>,
     <code data-q="vfma">vfma</code>,
     <code data-q="svadd">svadd</code>,
-    <code data-q="__m512">__m512</code>.
+    <code data-q="__m512i">__m512i</code> (type),
+    <code data-q="svbool_t">svbool_t</code> (type).
   </p>
 
   <div class="searchbox">
@@ -104,7 +105,7 @@
   </p>
 </footer>
 
-<script src="dist/simd-tooltips.js" data-on="hover" defer></script>
+<script src="dist/simd-tooltips.js" data-on="hover" data-wrap defer></script>
 <script src="app.js" defer></script>
 
 </body>
