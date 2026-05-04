@@ -420,6 +420,12 @@ button.tag-filter:hover, button.tag-filter:focus-visible {
     text-align: right;
     font-variant-numeric: tabular-nums;
 }
+/* Thin vertical separators between lane columns (skipping the
+   label-to-first-lane boundary so the labels float free). */
+.ex-val + .ex-val {
+    border-left: 1px solid var(--border);
+    padding-left: 4px;
+}
 .ex-out { color: #2c8a55; font-weight: 500; }
 .ex-hexcell { display: none; }
 .ex.hex .ex-dec { display: none; }

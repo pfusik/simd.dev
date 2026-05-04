@@ -22,66 +22,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from scribe import (  # noqa: E402
     DB_PATH,
-    NEON_VEC_TYPES,
-    SCALAR_TYPES,
     Signature,
+    build_inputs,
     compile_and_extract,
     decode_lanes,
     emit_source,
     parse_signature,
 )
-
-
-def _bits_of(lane_type: str) -> int:
-    return int(lane_type.replace("uint", "").replace("int", "").replace("_t", ""))
-
-
-def _is_unsigned(lane_type: str) -> bool:
-    return lane_type.startswith("uint")
-
-
-def _shape_of(param_type: str) -> tuple[int, int, bool]:
-    """Return (lane_count, lane_bits, unsigned)."""
-    if param_type in NEON_VEC_TYPES:
-        lane_type, count, _ = NEON_VEC_TYPES[param_type]
-    elif param_type in SCALAR_TYPES:
-        lane_type, count = param_type, 1
-    else:
-        raise ValueError(f"unsupported type {param_type}")
-    return count, _bits_of(lane_type), _is_unsigned(lane_type)
-
-
-# Pre-baked patterns per bit width. Picks values that fit comfortably in
-# both signed and unsigned lanes of that width, with a little variety so
-# overflow / sign behavior is visible in the output bytes.
-A_PATTERNS: dict[int, list[int]] = {
-    8:  [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
-    16: [100, 200, 300, 400, 500, 600, 700, 800],
-    32: [10, 20, 30, 40],
-    64: [1000, 2000],
-}
-B_SIGNED: dict[int, list[int]] = {
-    8:  [-50, 30, -20, 10, -5, 15, -25, 35, -40, 20, -10, 5, -45, 25, -15, 50],
-    16: [-5000, 3000, -2000, 1000, -500, 1500, -2500, 3500],
-    32: [-1_000_000_000, 1_500_000_000, -500_000_000, 750_000_000],
-    64: [-9_000_000_000, 4_500_000_000],
-}
-B_UNSIGNED: dict[int, list[int]] = {
-    8:  [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160],
-    16: [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000],
-    32: [1_000_000_000, 2_000_000_000, 3_000_000_000, 4_000_000_000],
-    64: [9_000_000_000, 18_000_000_000],
-}
-
-
-def make_input(param_type: str, role: str) -> list[int]:
-    count, bits, unsigned = _shape_of(param_type)
-    if role == "a":
-        return A_PATTERNS[bits][:count]
-    if role == "b":
-        src = B_UNSIGNED if unsigned else B_SIGNED
-        return src[bits][:count]
-    raise ValueError(f"unknown role {role!r}")
 
 
 def compiler_id() -> str:
@@ -181,13 +128,14 @@ def main() -> int:
         name = r["intrinsic"]
         try:
             sig = parse_signature(r["definition"])
-            inputs = [
-                make_input(p.type_name, "a" if i == 0 else "b")
-                for i, p in enumerate(sig.params)
-            ]
+            inputs = build_inputs(sig)
             source = emit_source(sig, inputs)
-            out_bytes = compile_and_extract(source)
-            out_lanes = decode_lanes(sig.return_type, out_bytes)
+            from scribe import effective_return  # local import
+            ret_ti, _ = effective_return(sig)
+            out_bytes, method = compile_and_extract(
+                source, expected_bytes=ret_ti.total_bytes
+            )
+            out_lanes = decode_lanes(ret_ti, out_bytes)
         except Exception as e:
             failures.append(name)
             print(f"  {name:24s}  FAIL  {e!s}".replace("\n", "\n    "))
@@ -198,7 +146,7 @@ def main() -> int:
             if args.full_inputs else fmt_inputs(sig, inputs)
         )
         print(f"  {name:24s}  {in_repr}")
-        print(f"    -> {out_bytes.hex()}  ({out_lanes})")
+        print(f"    -> {out_bytes.hex()}  ({out_lanes})  via {method}")
 
         examples.append({
             "intrinsic": name,
@@ -206,6 +154,7 @@ def main() -> int:
             "family": r["family"],
             "arch": r["arch"],
             "description": r.get("description", ""),
+            "verified_via": method,
             "inputs": [
                 {"name": p.name, "type": p.type_name, "values": vals}
                 for p, vals in zip(sig.params, inputs)
@@ -244,6 +193,7 @@ def main() -> int:
                 "compiler_id": cid,
                 "march": "",  # native build; cross-compile flags go here
                 "cluster_id": args.cluster,
+                "verified_via": ex["verified_via"],
                 "inputs": ex["inputs"],
                 "output": ex["output"],
                 "verified_at": today,

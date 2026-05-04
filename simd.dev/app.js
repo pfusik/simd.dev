@@ -470,17 +470,47 @@
         const out = ex.output || {};
         const outVals = Array.isArray(out.values) ? out.values : [out.values];
 
-        function laneBits(typeName) {
-            if (!typeName) return null;
-            let m = typeName.match(/^u?int(8|16|32|64)(?:x\d+)?_t$/);
-            if (m) return +m[1];
-            m = typeName.match(/^(?:float|bfloat|mfloat)(8|16|32|64)(?:x\d+)?_t$/);
-            if (m) return +m[1];
-            return null;
+        function laneInfo(typeName) {
+            if (!typeName) return { bits: null, kind: null };
+            if (/^const\s+(?:unsigned\s+)?int$/.test(typeName)) return { bits: 32, kind: 'int' };
+            let m = typeName.match(/^(u?)int(8|16|32|64|128)(?:x\d+)?_t$/);
+            if (m) return { bits: +m[2], kind: m[1] ? 'uint' : 'int' };
+            m = typeName.match(/^poly(8|16|32|64|128)(?:x\d+)?_t$/);
+            if (m) return { bits: +m[1], kind: 'poly' };
+            m = typeName.match(/^bfloat(16)(?:x\d+)?_t$/);
+            if (m) return { bits: 16, kind: 'bfloat' };
+            m = typeName.match(/^(?:m?float)(8|16|32|64)(?:x\d+)?_t$/);
+            if (m) return { bits: +m[1], kind: 'float' };
+            return { bits: null, kind: null };
         }
-        function hexFromValue(v, bits) {
-            if (bits == null) return '';
+        function hexFromValue(v, bits, kind) {
+            if (bits == null) return String(v);
             const len = bits / 4;
+            if (kind === 'float' || kind === 'bfloat') {
+                const f = Number(v);
+                if (kind === 'bfloat') {
+                    const buf = new ArrayBuffer(4);
+                    new Float32Array(buf)[0] = f;
+                    const u = new Uint32Array(buf)[0];
+                    return ((u >>> 16) & 0xffff).toString(16).padStart(4, '0');
+                }
+                if (bits === 32) {
+                    const buf = new ArrayBuffer(4);
+                    new Float32Array(buf)[0] = f;
+                    return new Uint32Array(buf)[0].toString(16).padStart(8, '0');
+                }
+                if (bits === 64) {
+                    const buf = new ArrayBuffer(8);
+                    new Float64Array(buf)[0] = f;
+                    return new BigUint64Array(buf)[0].toString(16).padStart(16, '0');
+                }
+                if (bits === 16 && typeof Float16Array !== 'undefined') {
+                    const buf = new ArrayBuffer(2);
+                    new Float16Array(buf)[0] = f;
+                    return new Uint16Array(buf)[0].toString(16).padStart(4, '0');
+                }
+                return String(v);
+            }
             if (bits <= 32) {
                 const mask = bits === 32 ? 0xffffffff : ((1 << bits) - 1);
                 const u = (Number(v) & mask) >>> 0;
@@ -498,19 +528,19 @@
 
         const rows = [];
         for (const inp of inputs) {
-            const bits = laneBits(inp.type);
+            const { bits, kind } = laneInfo(inp.type);
             const vals = Array.isArray(inp.values) ? inp.values : [inp.values];
             rows.push({
                 label: (inp.name || '') + ':',
                 values: vals,
-                hexes: vals.map(v => hexFromValue(v, bits)),
+                hexes: vals.map(v => hexFromValue(v, bits, kind)),
                 cls: '',
             });
         }
         {
-            const bits = laneBits(out.type);
+            const { bits, kind } = laneInfo(out.type);
             const hexes = outVals.map((v, i) =>
-                out.bytes_hex && bits ? hexFromBytes(out.bytes_hex, i, bits) : hexFromValue(v, bits)
+                out.bytes_hex && bits ? hexFromBytes(out.bytes_hex, i, bits) : hexFromValue(v, bits, kind)
             );
             rows.push({ label: '→', values: outVals, hexes, cls: 'ex-out', isOut: true });
         }

@@ -250,10 +250,17 @@ def load_verifier_examples() -> dict[str, dict]:
                 if name in out:
                     continue
                 # Strip the cache-only metadata; keep what the UI renders.
-                out[name] = {
+                shipped: dict = {
                     "inputs": e["inputs"],
                     "output": e["output"],
                 }
+                # `verified_via` distinguishes intrinsics whose result clang
+                # constant-folds at compile time ("fold") from those that
+                # require runtime execution ("execute"). Only the "fold"
+                # ones are CE-iframe-friendly without an execute backend.
+                if "verified_via" in e:
+                    shipped["verified_via"] = e["verified_via"]
+                out[name] = shipped
     return out
 
 
