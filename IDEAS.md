@@ -13,14 +13,16 @@ Each entry should explain *why* before *what*.
 
 **[Considered](#considered)**
 - [Plain-formula explanation per intrinsic (LLM with verifier)](#plain-formula-explanation-per-intrinsic-llm-with-verifier)
-- [Verifier interpreter for upstream pseudocode](#verifier-interpreter-for-upstream-pseudocode)
+- [Verifier: compile-and-run example code](#verifier-compile-and-run-example-code)
 - [Cross-arch mapping table (Intel ↔ NEON via simde + sse2neon)](#cross-arch-mapping-table-intel--neon-via-simde--sse2neon)
 - [Per-intrinsic static pages with worked examples](#per-intrinsic-static-pages-with-worked-examples)
+- [Live editable examples per intrinsic (CE iframe)](#live-editable-examples-per-intrinsic-ce-iframe)
 - ["When would I use this?" prose (LLM, second pass)](#when-would-i-use-this-prose-llm-second-pass)
 - [Per-arch sharded data files](#per-arch-sharded-data-files)
 - [Alias resolution UX](#alias-resolution-ux)
 - [Markdown / static-site integrations (build-time subset bundling)](#markdown--static-site-integrations-build-time-subset-bundling)
 - [VS Code extension — v1 polish (post-v0)](#vs-code-extension--v1-polish-post-v0)
+- [Other editor plugins (CLion, Zed, Neovim, Emacs, …)](#other-editor-plugins-clion-zed-neovim-emacs-)
 - [Intel arch refinement](#intel-arch-refinement)
 - [SIMD support for RISC-V vector and WebAssembly SIMD](#simd-support-for-risc-v-vector-and-webassembly-simd)
 - [Refresh detection](#refresh-detection)
@@ -83,26 +85,87 @@ predication, FP rounding, SVE scalable lengths, AES/SHA fixed transforms).
   can't justify the merge should fall out of the cluster. Manual review
   of a sample of cluster representatives catches the rest.
 
-## Verifier interpreter for upstream pseudocode
+## Verifier: compile-and-run example code
 
-**Why:** the LLM pass above is only as trustworthy as its outputs. A
-small interpreter for Intel's `<operation>` DSL and the ARM ASL subset
-that appears in `operations.json` can run the upstream pseudocode on the
-LLM's claimed example inputs and confirm the LLM's claimed outputs
-agree byte-exact.
+**Why:** the LLM pass above is only as trustworthy as its outputs. The
+authoritative ground truth for "what does this intrinsic produce on
+input X?" is the actual compiled instruction. Local clang / gcc with a
+standard cross-compile + emulator toolchain is the simplest path: no
+network round-trip, no rate limits, no third-party service in the
+critical build path. **Cache results in the repo** so subsequent
+rebuilds (and contributors who don't have the cross-toolchain) reuse
+the verified bytes offline.
 
-**Sketch:**
-- Intel DSL: `:=`, `[hi:lo]` bit slices, `FOR/IF/CASE`, `ZeroExtend*`,
-  `SignExtend*`, `Convert_*_To_*`, plus a stable shortlist of helper
-  functions (about 30-40 to cover all intrinsics). ~2 days to implement.
-- ARM ASL subset: `Elem[]`, `bits(N)`, `for e = 0 to elements-1`,
-  `UInt`, `SInt`, plus `FPRoundInt`/`Saturate`/etc. Limited to forms
-  actually present in `operations.json`. ~4 days.
-- Pipeline: LLM output → run upstream pseudocode in interpreter on
-  `example_inputs` → compare to LLM `example_outputs`. Reject mismatch;
-  re-prompt or fall back to upstream-only display.
-- Verifier coverage gates which entries get the LLM treatment in the
-  shipped DB; the rest fall back to upstream pseudocode verbatim.
+**Why this beats writing an interpreter for the upstream DSL** (the
+original sketch in this slot):
+- **Zero DSL parsing.** No need to write Intel `<operation>` or ARM
+  ASL interpreters with their long tail of helpers, predication,
+  rounding, FP exceptions, etc.
+- **Hardware is the source of truth.** Catches LLM errors that are
+  "consistent with the pseudocode" but wrong about real semantics
+  (saturation boundaries, NaN propagation, rounding edge cases). An
+  interpreter only catches "didn't follow the pseudocode."
+- **100% coverage.** Any intrinsic with a callable signature is
+  verifiable — including SVE / SVE2 / SME, AES / SHA, AMX, bf16 /
+  fp16.
+
+**Pipeline:**
+- LLM emits per cluster member
+  `{example_inputs, example_outputs_claimed}` (already needed for the
+  worked-example display).
+- Codegen a tiny C++ program per (intrinsic, example) — generated and
+  thrown away, never committed:
+  ```c++
+  #include <arm_neon.h>
+  #include <cstdio>
+  int main() {
+    int8x16_t a = { 1, -2, 3, ... };
+    int8x16_t b = { ... };
+    int8x16_t r = vqaddq_s8(a, b);
+    uint8_t buf[16]; vst1q_u8(buf, vreinterpretq_u8_s8(r));
+    for (int i = 0; i < 16; i++) printf("%02x", buf[i]);
+  }
+  ```
+- Compile with local clang + the same `-march` we already emit for
+  the in-tooltip CE links (flags already calibrated by the Compiler
+  Explorer URL work — see Done).
+- Execute:
+  - **x86 host:** native for SSE / AVX / AVX2 / AES / SHA; native or
+    [Intel SDE](https://www.intel.com/content/www/us/en/developer/articles/tool/software-development-emulator.html)
+    for any AVX-512 subset + AMX.
+  - **aarch64:** native on Apple Silicon for NEON / fp16 / bf16; QEMU
+    for SVE / SVE2; QEMU + real M4 hardware fallback for SME.
+- Parse stdout, byte-compare to the LLM's claim. Mismatch →
+  re-prompt, downgrade to upstream-pseudocode-only display, or flag
+  for manual review.
+- **Cache committed to the repo** at `data/verifier-cache/<key>.json`,
+  keyed by `(intrinsic, example_inputs_hash, compiler_id, march)`.
+  Refetch only on cache miss (new LLM output, new toolchain version,
+  or new example inputs). Means rebuilds are offline; contributors
+  and CI don't need the cross-toolchain; the verified bytes are part
+  of the repo's source-of-truth.
+
+**Compiler Explorer as backup:** for any architecture / extension
+awkward to cover locally (e.g. a contributor on x86 without QEMU
+verifying SVE2; SME on a box without M4 hardware), fall back to the
+CE compile API with the same harness and the same cache shape. Polite
+usage: per-contributor cache misses, not bulk refresh runs. Bulk
+refresh stays on whoever has the local rig set up.
+
+**Caveats:**
+- **Compile-time-constant immediates** must be substituted at codegen
+  (already done for the godbolt URL helper).
+- **Predicated SVE / SVE2:** harness has to set up a governing
+  predicate. Either drive it from `example_inputs` or default to
+  all-true.
+- **AMX:** requires SDE; tile config setup is non-trivial. ~30
+  intrinsics, manageable as a special case.
+- **FP rounding / FE flags:** the harness pins `MXCSR` / `FPCR` to a
+  known mode so behavior is deterministic.
+- **Cluster-rep only.** Verify ~3k representatives, not all 22k
+  records; cluster siblings inherit via type-substitution from the
+  rep. With the cache committed, steady-state rebuilds touch ~zero
+  programs — only on LLM-output churn.
 
 ## Cross-arch mapping table (Intel ↔ NEON via simde + sse2neon)
 
@@ -138,10 +201,40 @@ cross-arch equivalents, performance notes.
 **Sketch:**
 - `scripts/build_pages.py` emits `pages/<intrinsic>.html` (or `.md`) per
   record from the unified DB. ~3 days once the upstream pieces are in.
-- Worked-example numbers from native execution: write a tiny C program
-  per intrinsic with canonical inputs, compile, run (native or QEMU
-  cross-arch), capture the output. Deterministic, ~1-2 weeks for full
-  coverage; ~1 week if capped at the easy 70%.
+- Worked-example numbers come from the verifier cache (see
+  "Verifier: compile-and-run example code" above), not from a
+  separate execution pass — same data, two display surfaces.
+
+## Live editable examples per intrinsic (CE iframe)
+
+**Why:** once the verifier above is producing trusted worked examples
+per cluster, embedding them as an editable Compiler Explorer iframe on
+each per-intrinsic page is a near-free UX win. The reader can change
+inputs, swap compilers, see how the asm shifts, all without leaving
+the page. Turns each per-intrinsic page from a static doc into a live
+playground. The same `compilerExplorerUrl` helper that already builds
+the in-tooltip "open in CE" links produces the iframe state — no new
+URL plumbing.
+
+**Sketch:**
+- godbolt iframe URL form (`https://godbolt.org/e?...`, state in the
+  fragment, identical encoding to the `/z/...` short links we already
+  emit) is explicitly designed for embedding. Default to the verified
+  worked example as the iframe's initial code.
+- Lazy-mount the iframe on user click ("show editable example") rather
+  than auto-loading on page open — each iframe is a real page weight.
+- Keep the existing static "open in CE →" link for the tooltip and VS
+  Code surfaces; iframes inside a tooltip are too heavy.
+
+**Caveats:**
+- godbolt courtesy: each iframe load is one CE compile request. The
+  traffic is naturally minimal (one per user click on "show editable
+  example", lazy-mounted), but ask
+  [Matt Godbolt](https://github.com/mattgodbolt) for the OK before
+  flipping it on. Self-host the compiler-explorer container if volume
+  ever justifies it.
+- Privacy / CSP: iframes embed third-party JS; the consent banner /
+  CSP policy needs to allow `frame-src https://godbolt.org`.
 
 ## "When would I use this?" prose (LLM, second pass)
 
@@ -228,6 +321,46 @@ below). Stretch features that didn't make v0:
   appears together. For names where clangd has rich Doxygen (most of
   AVX2 / SSE / FMA) the user sees redundant content. Detect-and-skip
   in the hover provider would clean that up.
+
+## Other editor plugins (CLion, Zed, Neovim, Emacs, …)
+
+**Why:** the v0 extension covers VS Code, but a lot of the SIMD audience
+lives in other editors. Each has its own plugin format but the same
+underlying data file (`simd-data.json`) and the same hover-card markdown
+that `simd-vscode/extension.js` already emits — so each port is mostly
+glue, not new logic.
+
+**Candidates (by likely audience size for SIMD-heavy C/C++):**
+
+- **[CLion](https://www.jetbrains.com/clion/) / IntelliJ Platform** —
+  JetBrains plugin (Kotlin/Java), `DocumentationProvider` API. Largest
+  paid-IDE C/C++ audience; same plugin would also work in IntelliJ IDEA
+  Ultimate, Rider, Android Studio.
+- **[Zed](https://zed.dev/)** — extensions are WASM (Rust → wasm32-wasi)
+  with a small surface; hover hooks land via the LSP integration.
+  Growing C/C++ user base, AOT-fast.
+- **Neovim / Vim** — Lua plugin hooking `vim.lsp.handlers["textDocument/hover"]`
+  or a standalone hover provider. Big C/C++ kernel/systems audience.
+- **Emacs** — `eglot` / `lsp-mode` advice, or a standalone minor mode.
+  Smaller but vocal SIMD audience (numerical / scientific computing).
+- **Sublime Text / Helix** — LSP-based; lower priority but cheap once a
+  language-server form exists.
+- **Xcode** — Apple-silicon NEON/SVE2 audience writing in Xcode. Source
+  Editor extensions are limited (no hover API), so this likely needs a
+  different surface (quick-help docset or a sidebar webview).
+
+**Shared substrate:** the cheapest path is a tiny **language server**
+that wraps the existing data file and emits the same Markdown card. Then
+every editor with LSP gets it free; native plugins remain optional for
+editors where LSP UX is worse than native (CLion, Xcode).
+
+**Caveats:**
+- Each marketplace has its own publishing friction (JetBrains
+  Marketplace review, Zed extension registry, MELPA for Emacs, etc.).
+  Maintenance cost scales with the number of native ports.
+- Don't write N copies of the markdown renderer. Either share via an
+  LSP, or extract the card-rendering logic from `simd-vscode/extension.js`
+  into a `simd-card/` package that all ports import.
 
 ## Intel arch refinement
 
