@@ -17,3 +17,17 @@ for f in simd-tooltips.js simd-names.json simd-data.json; do
     cp "$SRC/$f" "$DEST/$f"
     printf '  %12d B  %s\n' "$(wc -c < "$DEST/$f" | tr -d ' ')" "$DEST/$f"
 done
+
+# simd-annotate's example files. The "original" + "annotated" pair are
+# linked from the simd-annotate about-card on the landing page.
+ANNO_SRC="$HERE/../simd-annotate/examples"
+if [[ -d "$ANNO_SRC" ]]; then
+    for src in sample.html sample.annotated.html; do
+        if [[ -f "$ANNO_SRC/$src" ]]; then
+            cp "$ANNO_SRC/$src" "$DEST/simd-annotate-$src"
+            printf '  %12d B  %s\n' \
+                "$(wc -c < "$DEST/simd-annotate-$src" | tr -d ' ')" \
+                "$DEST/simd-annotate-$src"
+        fi
+    done
+fi

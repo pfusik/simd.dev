@@ -131,6 +131,7 @@ void saxpy_sve(float a, const float *x, const float *y, float *out, size_t n) {
     wrapClass: 'simd-intrinsic',
     tooltipClass: 'simd-tooltip',
     moveThrottleMs: 30,  // throttle for lazy-mode mousemove handler
+    pageBase: 'https://simd.dev/',  // dedicated-intrinsic-page base URL
   };
 
   // ---------------------------------------------------------------------
@@ -141,6 +142,7 @@ void saxpy_sve(float a, const float *x, const float *y, float *out, size_t n) {
   let typeSet = null;            // Set<string> -- subset of names that are SIMD types
   let ambiguous = null;          // {alias: [canonical, ...]}
   let records = null;            // {name: record} -- lazy
+  let clusters = null;           // {cluster_id: [name, ...]} -- variant groups
   let dataPromise = null;        // Promise<records> in flight
   let activeTooltip = null;
   let activeTarget = null;       // current trigger element (or virtual key)
@@ -160,6 +162,11 @@ void saxpy_sve(float a, const float *x, const float *y, float *out, size_t n) {
     scan: scan,                  // wrap-mode only: re-scan a subtree (SPAs)
     unwrap: unwrap,              // wrap-mode only: remove all wrappers
     hide: hide,
+    compilerExplorerUrl: function (rec) { return compilerExplorerUrl(rec); },
+    // Compiler / march / headers for `rec`. Used by simd.dev's "run on CE"
+    // feature to build a custom harness with the same toolchain that
+    // produced the cached worked example.
+    ceConfigFor: function (rec) { return ceConfigFor(rec); },
     _state: () => ({ cfg, nameCount: nameSet ? nameSet.size : 0, recordCount: records ? Object.keys(records).length : 0 }),
   };
 
@@ -630,6 +637,61 @@ void saxpy_sve(float a, const float *x, const float *y, float *out, size_t n) {
     document.body.appendChild(tip);
     tip.addEventListener('mouseenter', () => { if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; } });
     tip.addEventListener('mouseleave', scheduleHide);
+    // Tab toggles inside the tooltip: click any header to open its body
+    // (closing the others). Click the active header again to close.
+    tip.addEventListener('click', (ev) => {
+      // dec/hex switch on the example panel: any click flips, regardless
+      // of which label was hit. Doesn't reposition.
+      const modeBtn = ev.target.closest('button.simd-tt-ex-mode[data-mode]');
+      if (modeBtn && tip.contains(modeBtn)) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const ex = modeBtn.closest('.simd-tt-ex');
+        if (ex) {
+          const isHex = ex.classList.toggle('hex');
+          for (const b of ex.querySelectorAll('button.simd-tt-ex-mode')) {
+            const active = (b.dataset.mode === 'hex') === isHex;
+            b.classList.toggle('is-active', active);
+            b.setAttribute('aria-pressed', active ? 'true' : 'false');
+          }
+        }
+        return;
+      }
+      // "+N more" expander on the variants list.
+      const moreBtn = ev.target.closest('button.simd-tt-vars-more');
+      if (moreBtn && tip.contains(moreBtn)) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const tail = moreBtn.previousElementSibling;
+        if (tail && tail.classList.contains('simd-tt-vars-tail')) tail.hidden = false;
+        moreBtn.remove();
+        if (activeTarget && activeTarget.getBoundingClientRect) {
+          positionAtRect(tip, activeTarget.getBoundingClientRect());
+        }
+        return;
+      }
+      const btn = ev.target.closest('button.simd-tt-tab[data-tab]');
+      if (!btn || !tip.contains(btn)) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      const id = btn.dataset.tab;
+      const wasActive = btn.getAttribute('aria-expanded') === 'true';
+      for (const b of tip.querySelectorAll('button.simd-tt-tab')) {
+        b.setAttribute('aria-expanded', 'false');
+      }
+      for (const body of tip.querySelectorAll('.simd-tt-tab-body')) {
+        body.hidden = true;
+      }
+      if (!wasActive) {
+        btn.setAttribute('aria-expanded', 'true');
+        const body = tip.querySelector('.simd-tt-tab-body[data-body="' + id + '"]');
+        if (body) body.hidden = false;
+      }
+      // Reposition since the tooltip's height likely changed.
+      if (activeTarget && activeTarget.getBoundingClientRect) {
+        positionAtRect(tip, activeTarget.getBoundingClientRect());
+      }
+    });
     activeTooltip = tip;
     return tip;
   }
@@ -683,12 +745,323 @@ void saxpy_sve(float a, const float *x, const float *y, float *out, size_t n) {
     tip.style.top = Math.round(top + window.scrollY) + 'px';
   }
 
+  // ---------------------------------------------------------------------
+  // Compiler Explorer URL builder
+  //
+  // Generates a godbolt.org URL prefilled with a tiny C function that
+  // calls the intrinsic, with the right include + compiler flags for the
+  // ISA family. Pure function of `rec`. Returns null for SIMD types
+  // (a typedef has no asm to show) and for records we can't classify.
+  //
+  // godbolt's `clientstate` URL form: a base64-encoded JSON describing
+  // sessions / compilers / source. URL-safe base64, padding stripped.
+  // ---------------------------------------------------------------------
+
+  // Intel CPUID flag → clang feature switch. Records carry a list of
+  // CPUID flags (e.g. ['AVX512F', 'AVX512VL']); we union them.
+  const CE_INTEL_FLAGS = {
+    'MMX': '-mmmx', 'SSE': '-msse', 'SSE2': '-msse2', 'SSE3': '-msse3',
+    'SSSE3': '-mssse3', 'SSE4.1': '-msse4.1', 'SSE4.2': '-msse4.2',
+    'AVX': '-mavx', 'AVX2': '-mavx2',
+    'FMA': '-mfma', 'AES': '-maes', 'SHA': '-msha', 'SHA512': '-msha512',
+    'BMI1': '-mbmi', 'BMI2': '-mbmi2', 'POPCNT': '-mpopcnt',
+    'F16C': '-mf16c', 'GFNI': '-mgfni', 'VAES': '-mvaes',
+    'VPCLMULQDQ': '-mvpclmulqdq', 'PCLMULQDQ': '-mpclmul',
+    'AVX512F': '-mavx512f', 'AVX512VL': '-mavx512vl',
+    'AVX512BW': '-mavx512bw', 'AVX512DQ': '-mavx512dq',
+    'AVX512CD': '-mavx512cd', 'AVX512_BF16': '-mavx512bf16',
+    'AVX512_FP16': '-mavx512fp16', 'AVX512_VBMI': '-mavx512vbmi',
+    'AVX512_VBMI2': '-mavx512vbmi2', 'AVX512_VNNI': '-mavx512vnni',
+    'AVX512_BITALG': '-mavx512bitalg', 'AVX512VPOPCNTDQ': '-mavx512vpopcntdq',
+    'AVX512IFMA52': '-mavx512ifma', 'AVX512_VP2INTERSECT': '-mavx512vp2intersect',
+    'AVX_VNNI': '-mavxvnni', 'AVX_VNNI_INT8': '-mavxvnniint8',
+    'AVX_VNNI_INT16': '-mavxvnniint16', 'AVX_IFMA': '-mavxifma',
+    'AVX_NE_CONVERT': '-mavxneconvert',
+  };
+
+  // ARM ACLE SIMD_ISA → compiler + arch + headers list. Each ARM family
+  // rides on an architecture-specific clang on godbolt:
+  //   aarch64: armv8-full-cclang-trunk (the "all architectural features" build,
+  //            ships with FP16/BF16/i8mm/dotprod/crypto enabled).
+  //   aarch32 / M-profile: armv7-cclang-trunk (we pick the M-profile via -march).
+  //
+  // Clang ships several ARM-related headers:
+  //   arm_neon.h            -- NEON vector ops (vaddq_*, vfmaq_*, …)
+  //   arm_fp16.h            -- scalar FP16 ops (vfmah_f16, vaddh_f16, …)
+  //   arm_bf16.h            -- scalar BF16 ops
+  //   arm_sve.h             -- SVE / SVE2 (sv*)
+  //   arm_sme.h             -- SME / SME2 (separate from arm_sve.h)
+  //   arm_neon_sve_bridge.h -- NEON↔SVE conversions
+  //   arm_mve.h             -- Helium / MVE
+  //
+  // Including a header that's irrelevant to the current march is harmless --
+  // the header declares functions, which only fail when actually called.
+  // So we err on the generous side per family.
+  // Note on -march: the "full" clang has every feature pre-enabled, but
+  // passing -march=<base> resets to just what that base implies. So we
+  // re-enable +fp16/+bf16/+i8mm/+dotprod/+crypto explicitly on the aarch64
+  // marches to avoid "needs target feature fullfp16" errors on scalar FP16
+  // intrinsics like vfmah_f16.
+  const ARM_EXT = '+fp16+bf16+i8mm+dotprod+crypto';
+  const CE_ARM_ARCHS = {
+    'Neon':         { compiler: 'armv8-full-cclang-trunk', march: 'armv8.6-a' + ARM_EXT,                                       headers: ['arm_neon.h', 'arm_fp16.h', 'arm_bf16.h'] },
+    'SVE':          { compiler: 'armv8-full-cclang-trunk', march: 'armv8.6-a+sve' + ARM_EXT,                                   headers: ['arm_sve.h', 'arm_neon_sve_bridge.h']  },
+    'SVE2':         { compiler: 'armv8-full-cclang-trunk', march: 'armv9-a' + ARM_EXT,                                         headers: ['arm_sve.h', 'arm_neon_sve_bridge.h']  },
+    'SME and SME2': { compiler: 'armv8-full-cclang-trunk', march: 'armv9.2-a+sme2+sme-i16i64+sme-f64f64' + ARM_EXT,             headers: ['arm_sve.h', 'arm_sme.h', 'arm_neon_sve_bridge.h'] },
+    'Helium':       { compiler: 'armv7-cclang-trunk',      march: 'armv8.1-m.main+mve.fp+fp.dp',                                headers: ['arm_mve.h', 'arm_fp16.h', 'arm_bf16.h'] },
+  };
+
+  function ceParseSignature(def) {
+    if (!def) return null;
+    // Collapse multi-line definitions (we pretty-print 3+ args).
+    const flat = def.replace(/\s+/g, ' ').trim();
+    const open = flat.indexOf('(');
+    const close = flat.lastIndexOf(')');
+    if (open < 0 || close < 0 || close < open) return null;
+    const head = flat.slice(0, open).trim();
+    const paramStr = flat.slice(open + 1, close).trim();
+
+    const headParts = head.split(/\s+/);
+    const name = headParts.pop();
+    const returnType = headParts.join(' ');
+
+    if (!paramStr || paramStr === 'void') {
+      return { returnType, name, params: 'void', argList: '' };
+    }
+    // Split on commas (no nested parens in any current intrinsic signature).
+    const params = paramStr.split(',').map(p => p.trim());
+    const argNames = params.map(p => {
+      // If the type contains `const int`, the parameter must be a compile-time
+      // constant -- substitute a literal 0 so the code compiles.
+      if (/\bconst\s+int\b/.test(p) && !/\*/.test(p)) return '0';
+      const m = p.match(/([A-Za-z_]\w*)\s*$/);
+      return m ? m[1] : '0';
+    });
+    return { returnType, name, params: paramStr, argList: argNames.join(', ') };
+  }
+
+  function ceBase64Url(str) {
+    const utf8 = unescape(encodeURIComponent(str));
+    return btoa(utf8).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+
+  // ARM family priority -- least-specific march wins so an intrinsic that's
+  // available in both SVE and SME contexts compiles with -march=...+sve, not
+  // the heavier SME march.
+  const CE_ARM_ARCH_ORDER = ['Neon', 'Helium', 'SVE', 'SVE2', 'SME and SME2'];
+
+  function ceConfigFor(rec) {
+    if (!rec || rec.kind === 'type') return null;
+    if (rec.source === 'arm-acle') {
+      const fset = new Set(rec.family || []);
+      for (const archKey of CE_ARM_ARCH_ORDER) {
+        if (fset.has(archKey)) {
+          const a = CE_ARM_ARCHS[archKey];
+          return {
+            compiler: a.compiler,
+            options: `-O2 -march=${a.march}`,
+            headers: a.headers,
+          };
+        }
+      }
+      return null;
+    }
+    if (rec.source === 'intel-iguide') {
+      const flags = [];
+      for (const f of rec.family || []) {
+        const flag = CE_INTEL_FLAGS[f];
+        if (flag && flags.indexOf(flag) < 0) flags.push(flag);
+      }
+      // Default fallback if we don't know the family flag.
+      if (flags.length === 0) flags.push('-mavx2');
+      return {
+        compiler: 'cclang_trunk',
+        options: '-O2 ' + flags.join(' '),
+        headers: ['immintrin.h'],
+      };
+    }
+    return null;
+  }
+
+  function compilerExplorerUrl(rec) {
+    const cfg = ceConfigFor(rec);
+    if (!cfg) return null;
+    const sig = ceParseSignature(rec.definition);
+    if (!sig) return null;
+
+    const includes = cfg.headers.map(h => `#include <${h}>`).join('\n');
+    const source =
+      `${includes}\n\n` +
+      `${sig.returnType} example(${sig.params}) {\n` +
+      `    return ${sig.name}(${sig.argList});\n` +
+      `}\n`;
+
+    const state = {
+      sessions: [{
+        id: 1,
+        language: 'c',
+        source: source,
+        compilers: [{
+          id: cfg.compiler,
+          options: cfg.options,
+          libs: [],
+          filters: {
+            binary: false, commentOnly: true, demangle: true, directives: true,
+            execute: false, intel: true, labels: true, libraryCode: false, trim: true,
+          },
+        }],
+      }],
+      version: 4,
+    };
+    return 'https://godbolt.org/clientstate/' + ceBase64Url(JSON.stringify(state));
+  }
+
   function renderPlaceholder(name) {
     return `<div class="simd-tt-head"><code>${escapeHtml(name)}<\/code><\/div><div class="simd-tt-loading">loading…<\/div>`;
   }
 
   function renderError(name, err) {
     return `<div class="simd-tt-head"><code>${escapeHtml(name)}<\/code><\/div><div class="simd-tt-error">${escapeHtml(String(err && err.message || err || 'load failed'))}<\/div>`;
+  }
+
+  // ex = { inputs: [{name, type, values}], output: {type, bytes_hex, values} }
+  // Render as a CSS grid so lane values line up vertically across rows.
+  // Each value cell carries both dec and hex spans; a dec/hex toggle in the
+  // top-right corner switches which one is visible (CSS-only).
+  function renderExample(ex) {
+    const inputs = ex.inputs || [];
+    const out = ex.output || {};
+    const outVals = Array.isArray(out.values) ? out.values : [out.values];
+
+    function laneInfo(typeName) {
+      if (!typeName) return { bits: null, kind: null };
+      // const int / const unsigned int -- immediate; treat as 32-bit so
+      // it still has a meaningful hex form.
+      if (/^const\s+(?:unsigned\s+)?int$/.test(typeName)) return { bits: 32, kind: 'int' };
+      // Allow zero or more `xN` segments so tuple types like
+      // int8x16x2_t / float32x4x3_t / poly16x4x4_t match too.
+      let m = typeName.match(/^(u?)int(8|16|32|64|128)(?:x\d+)*_t$/);
+      if (m) return { bits: +m[2], kind: m[1] ? 'uint' : 'int' };
+      m = typeName.match(/^poly(8|16|32|64|128)(?:x\d+)*_t$/);
+      if (m) return { bits: +m[1], kind: 'poly' };
+      m = typeName.match(/^bfloat(16)(?:x\d+)*_t$/);
+      if (m) return { bits: 16, kind: 'bfloat' };
+      m = typeName.match(/^(?:m?float)(8|16|32|64)(?:x\d+)*_t$/);
+      if (m) return { bits: +m[1], kind: 'float' };
+      return { bits: null, kind: null };
+    }
+    function hexFromValue(v, bits, kind) {
+      if (bits == null) return String(v);
+      const len = bits / 4;
+      if (kind === 'float' || kind === 'bfloat') {
+        const f = Number(v);
+        if (kind === 'bfloat') {
+          // bf16: top 16 bits of the float32 representation.
+          const buf = new ArrayBuffer(4);
+          new Float32Array(buf)[0] = f;
+          const u = new Uint32Array(buf)[0];
+          return ((u >>> 16) & 0xffff).toString(16).padStart(4, '0');
+        }
+        if (bits === 32) {
+          const buf = new ArrayBuffer(4);
+          new Float32Array(buf)[0] = f;
+          return new Uint32Array(buf)[0].toString(16).padStart(8, '0');
+        }
+        if (bits === 64) {
+          const buf = new ArrayBuffer(8);
+          new Float64Array(buf)[0] = f;
+          return new BigUint64Array(buf)[0].toString(16).padStart(16, '0');
+        }
+        if (bits === 16 && typeof Float16Array !== 'undefined') {
+          const buf = new ArrayBuffer(2);
+          new Float16Array(buf)[0] = f;
+          return new Uint16Array(buf)[0].toString(16).padStart(4, '0');
+        }
+        return String(v);  // fp16 fallback if Float16Array unavailable
+      }
+      if (bits <= 32) {
+        const mask = bits === 32 ? 0xffffffff : ((1 << bits) - 1);
+        const u = (Number(v) & mask) >>> 0;
+        return u.toString(16).padStart(len, '0');
+      }
+      let n = typeof v === 'bigint' ? v : BigInt(v);
+      if (n < 0n) n = (1n << 64n) + n;
+      return n.toString(16).padStart(len, '0');
+    }
+    function hexFromBytes(bytesHex, laneIdx, bits) {
+      // bytes are little-endian; flip per-lane for display.
+      const lb = bits / 8;
+      const slice = bytesHex.slice(laneIdx * lb * 2, (laneIdx + 1) * lb * 2);
+      return slice.match(/.{1,2}/g).reverse().join('');
+    }
+
+    function tupleCount(typeName) {
+      const m = (typeName || '').match(/^[a-z]+\d+x(\d+)x[234]_t$/);
+      return m ? +m[1] : 0;
+    }
+
+    const rows = [];
+    for (const inp of inputs) {
+      const { bits, kind } = laneInfo(inp.type);
+      const vals = Array.isArray(inp.values) ? inp.values : [inp.values];
+      const isPtr = /\*\s*$/.test(inp.type || '');
+      const labelName = (isPtr ? '*' : '') + (inp.name || '');
+      rows.push({
+        label: labelName + ':',
+        values: vals,
+        hexes: vals.map(v => hexFromValue(v, bits, kind)),
+        cls: '',
+        tupleCount: tupleCount(inp.type),
+      });
+    }
+    {
+      const { bits, kind } = laneInfo(out.type);
+      const hexes = outVals.map((v, i) =>
+        out.bytes_hex && bits ? hexFromBytes(out.bytes_hex, i, bits) : hexFromValue(v, bits, kind)
+      );
+      rows.push({
+        label: '→', values: outVals, hexes,
+        cls: 'simd-tt-ex-out', isOut: true,
+        tupleCount: tupleCount(out.type),
+      });
+    }
+
+    // Sub-vector boundaries are per-row: only register tuple rows get
+    // the thicker separator. Memory rows and plain vectors get nothing.
+
+    const lanes = Math.max(1, ...rows.map(r => r.values.length));
+    const cells = [];
+    for (const row of rows) {
+      const labelClass = row.isOut
+        ? 'simd-tt-ex-lbl simd-tt-ex-arrow' : 'simd-tt-ex-lbl';
+      cells.push(`<span class="${labelClass}">${escapeHtml(row.label)}<\/span>`);
+      for (let i = 0; i < lanes; i++) {
+        const isBoundary = row.tupleCount > 0
+          && i > 0 && (i % row.tupleCount) === 0;
+        const cls = ['simd-tt-ex-val', row.cls,
+                     isBoundary ? 'simd-tt-ex-boundary' : '']
+                    .filter(Boolean).join(' ');
+        if (i < row.values.length) {
+          const dec = String(row.values[i]);
+          const hex = row.hexes[i] || '';
+          cells.push(
+            `<span class="${cls}">` +
+            `<span class="simd-tt-ex-dec">${escapeHtml(dec)}<\/span>` +
+            `<span class="simd-tt-ex-hexcell">${escapeHtml(hex)}<\/span>` +
+            `<\/span>`
+          );
+        } else {
+          cells.push(`<span class="${cls}"><\/span>`);
+        }
+      }
+    }
+    const cols = `auto repeat(${lanes}, max-content)`;
+    const toggle =
+      `<div class="simd-tt-ex-modes" role="group" aria-label="number base">` +
+      `<button type="button" class="simd-tt-ex-mode is-active" data-mode="dec" aria-pressed="true">dec<\/button>` +
+      `<button type="button" class="simd-tt-ex-mode" data-mode="hex" aria-pressed="false">hex<\/button>` +
+      `<\/div>`;
+    return `<div class="simd-tt-ex" style="grid-template-columns:${cols}">${toggle}${cells.join('')}<\/div>`;
   }
 
   function renderTooltip(name, rec, ambig) {
@@ -703,7 +1076,18 @@ void saxpy_sve(float a, const float *x, const float *y, float *out, size_t n) {
     const families = (rec.family || []).map(f => `<span class="simd-tt-tag">${escapeHtml(f)}<\/span>`).join(' ');
     const archs = (rec.arch || []).map(a => `<span class="simd-tt-arch">${escapeHtml(a)}<\/span>`).join(' ');
     const desc = rec.description ? `<div class="simd-tt-desc">${escapeHtml(rec.description)}<\/div>` : '';
-    const link = rec.doc_url ? `<div class="simd-tt-foot"><a href="${escapeAttr(rec.doc_url)}" target="_blank" rel="noopener">${rec.source === 'arm-acle' ? 'Arm developer docs' : 'Intel Intrinsics Guide'} →<\/a><\/div>` : '';
+
+    // Footer: doc link + Compiler Explorer link (when applicable).
+    const links = [];
+    if (rec.doc_url) {
+      const docLabel = rec.source === 'arm-acle' ? 'Arm developer docs' : 'Intel Intrinsics Guide';
+      links.push(`<a href="${escapeAttr(rec.doc_url)}" target="_blank" rel="noopener">${docLabel} →<\/a>`);
+    }
+    const ceUrl = compilerExplorerUrl(rec);
+    if (ceUrl) {
+      links.push(`<a href="${escapeAttr(ceUrl)}" target="_blank" rel="noopener">Compiler Explorer →<\/a>`);
+    }
+    const link = links.length ? `<div class="simd-tt-foot">${links.join(' &middot; ')}<\/div>` : '';
 
     // SIMD types use a slimmer layout: the "definition" is a one-line typedef
     // and lives next to the description. Intrinsics keep the multi-line <pre>
@@ -717,16 +1101,67 @@ void saxpy_sve(float a, const float *x, const float *y, float *out, size_t n) {
         ${link}`;
     }
 
-    let pseudocode = '';
+    // Pseudocode + variants live in a single tab row. Headers stay inline;
+    // only one body is open at a time (mutual exclusion). Click handler is
+    // delegated on the tooltip element in ensureTooltip().
+    const tabs = [];
     if (rec.pseudocode && cfg.pseudocode !== 'off') {
-      const open = cfg.pseudocode === 'expanded' ? ' open' : '';
-      pseudocode = `<details class="simd-tt-pc"${open}><summary>pseudocode<\/summary><pre>${escapeHtml(rec.pseudocode)}<\/pre><\/details>`;
+      tabs.push({
+        id: 'pc',
+        label: 'pseudocode',
+        body: `<pre class="simd-tt-pc-body">${escapeHtml(rec.pseudocode)}<\/pre>`,
+      });
+    }
+    if (rec.example) {
+      tabs.push({
+        id: 'ex',
+        label: 'example',
+        body: renderExample(rec.example),
+      });
+    }
+    let variantList = null;
+    if (rec.cluster && clusters && clusters[rec.cluster]) {
+      const siblings = clusters[rec.cluster].filter(n => n !== name);
+      if (siblings.length > 0) variantList = siblings;
+    }
+    if (variantList) {
+      const VAR_LIMIT = 50;
+      const head = variantList.slice(0, VAR_LIMIT);
+      const tail = variantList.slice(VAR_LIMIT);
+      let chips = head.map(n => `<code>${escapeHtml(n)}<\/code>`).join(' ');
+      if (tail.length) {
+        chips += ' <span class="simd-tt-vars-tail" hidden>'
+          + tail.map(n => `<code>${escapeHtml(n)}<\/code>`).join(' ')
+          + '<\/span>';
+        chips += ' <button type="button" class="simd-tt-vars-more">+'
+          + tail.length + ' more<\/button>';
+      }
+      tabs.push({
+        id: 'vars',
+        label: variantList.length + ' variants',
+        body: `<div class="simd-tt-vars-list">${chips}<\/div>`,
+      });
+    }
+    let togglesRow = '';
+    if (tabs.length) {
+      // Default open: pseudocode if cfg.pseudocode === 'expanded', else none.
+      const defaultOpen = (cfg.pseudocode === 'expanded' && tabs.some(t => t.id === 'pc')) ? 'pc' : null;
+      const headers = tabs.map(t =>
+        `<button type="button" class="simd-tt-tab" data-tab="${t.id}" aria-expanded="${t.id === defaultOpen}">${t.label}<\/button>`
+      ).join('');
+      const bodies = tabs.map(t =>
+        `<div class="simd-tt-tab-body" data-body="${t.id}"${t.id === defaultOpen ? '' : ' hidden'}>${t.body}<\/div>`
+      ).join('');
+      togglesRow = `<div class="simd-tt-toggles">${headers}${bodies}<\/div>`;
     }
 
-    return `<div class="simd-tt-head"><code>${escapeHtml(name)}<\/code> ${families} ${archs}<\/div>
+    const pageUrl = `${cfg.pageBase}?intrinsic=${encodeURIComponent(name)}`;
+    const pageLink = `<a class="simd-tt-open" href="${escapeAttr(pageUrl)}" target="_blank" rel="noopener" title="Open simd.dev page">↗<\/a>`;
+
+    return `<div class="simd-tt-head"><code>${escapeHtml(name)}<\/code> ${families} ${archs}${pageLink}<\/div>
       <pre class="simd-tt-sig">${escapeHtml(rec.definition || '')}<\/pre>
       ${desc}
-      ${pseudocode}
+      ${togglesRow}
       ${link}`;
   }
 
@@ -738,6 +1173,7 @@ void saxpy_sve(float a, const float *x, const float *y, float *out, size_t n) {
     if (dataPromise) return dataPromise;
     dataPromise = fetchJSON(cfg.dataUrl).then(doc => {
       records = doc.records || doc;
+      clusters = doc.clusters || {};
       return records;
     });
     return dataPromise;
@@ -841,6 +1277,8 @@ void saxpy_sve(float a, const float *x, const float *y, float *out, size_t n) {
     .simd-tt-head code { color: #ffd479; font-weight: 600; }
     .simd-tt-tag { font-size: 10.5px; padding: 1px 6px; background: #2c5282; color: #cfe1ff; border-radius: 999px; line-height: 1.5; }
     .simd-tt-arch { font-size: 10.5px; padding: 1px 6px; background: #553c5b; color: #ffd2f0; border-radius: 999px; line-height: 1.5; }
+    .simd-tt-open { margin-left: auto; color: #8a93a3; text-decoration: none; font-size: 14px; line-height: 1; padding: 0 2px; }
+    .simd-tt-open:hover { color: #d8dde7; }
     .simd-tt-sig { margin: 0 0 6px 0; padding: 6px 8px; background: #131722; border-radius: 4px; white-space: pre-wrap; overflow-x: auto; }
     .simd-tt-typedef { display: block; margin: 0 0 6px 0; padding: 5px 8px; background: #131722; border-radius: 4px; color: #d8dde7; }
     .simd-tt-kind { font-size: 10.5px; padding: 1px 6px; background: #4a3c2a; color: #ffd58a; border-radius: 999px; line-height: 1.5; }
@@ -850,32 +1288,49 @@ void saxpy_sve(float a, const float *x, const float *y, float *out, size_t n) {
     .simd-tt-foot a:hover { text-decoration: underline; }
     .simd-tt-loading { color: #888; }
     .simd-tt-error { color: #ff7b7b; }
-    /* Upstream pseudocode: collapsed by default to keep the tooltip compact;
-       expandable for power readers. The default <summary> disclosure marker
-       has to be removed three different ways to cover all evergreen browsers
-       (Chrome/Safari/Firefox) -- otherwise users get a bullet/dot leaking
-       through alongside our custom triangle. */
-    .simd-tt-pc { margin-top: 6px; }
-    .simd-tt-pc > summary {
-      display: block;                /* Firefox: needed before list-style applies */
-      cursor: pointer;
+
+    /* Tab interface: pseudocode + variants share one row of header buttons;
+       at most one body is open at a time (mutual exclusion handled by JS).
+       Each header is a button; bodies have flex-basis 100% so they take
+       the full row underneath when shown. */
+    .simd-tt-toggles {
+      margin-top: 6px;
+      display: flex;
+      flex-wrap: wrap;
+      column-gap: 1.4em;
+      row-gap: 4px;
+      align-items: flex-start;
       font-size: 11.5px;
+    }
+    .simd-tt-tab {
+      flex: 0 0 auto;
+      font: inherit;
+      background: none;
+      border: none;
+      padding: 0;
+      cursor: pointer;
       color: #8fb6ff;
       user-select: none;
-      list-style: none;              /* Chrome */
     }
-    .simd-tt-pc > summary::-webkit-details-marker { display: none; } /* Safari */
-    .simd-tt-pc > summary::marker { content: ''; }                   /* Firefox */
-    .simd-tt-pc > summary::before {
+    .simd-tt-tab:hover, .simd-tt-tab:focus-visible {
+      outline: none;
+      text-decoration: underline;
+    }
+    .simd-tt-tab::before {
       content: '▶';
       display: inline-block;
       width: 14px;
       color: #8fb6ff;
       font-size: 11px;
-      transform: translateY(-1px);  /* nudge to optical baseline */
+      transform: translateY(-1px);
     }
-    .simd-tt-pc[open] > summary::before { content: '▼'; }
-    .simd-tt-pc > pre {
+    .simd-tt-tab[aria-expanded="true"]::before { content: '▼'; }
+    .simd-tt-tab-body {
+      flex: 1 1 100%;
+      min-width: 0;
+    }
+    .simd-tt-tab-body[hidden] { display: none; }
+    .simd-tt-pc-body {
       margin: 4px 0 0 0;
       padding: 6px 8px;
       max-height: 280px;
@@ -887,6 +1342,94 @@ void saxpy_sve(float a, const float *x, const float *y, float *out, size_t n) {
       font-size: 11.5px;
       line-height: 1.4;
     }
+    .simd-tt-vars-list {
+      margin-top: 4px;
+      max-height: 240px;
+      overflow-y: auto;
+      line-height: 1.7;
+    }
+    .simd-tt-vars-list code {
+      display: inline-block;
+      margin: 0 3px 2px 0;
+      padding: 1px 7px;
+      background: #2a3245;
+      color: #d8dde7;
+      border-radius: 3px;
+      font-size: 11px;
+    }
+    .simd-tt-vars-more {
+      display: inline-block;
+      margin: 0 3px 2px 0;
+      padding: 1px 7px;
+      background: transparent;
+      color: #8a93a3;
+      border: 1px dashed #4a5468;
+      border-radius: 3px;
+      font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+      cursor: pointer;
+    }
+    .simd-tt-vars-more:hover { color: #d8dde7; border-color: #6a7488; }
+    .simd-tt-vars-tail { display: contents; }
+    .simd-tt-ex {
+      position: relative;
+      display: grid;
+      column-gap: 6px;
+      row-gap: 2px;
+      margin: 4px 0 0 0;
+      padding: 6px 38px 6px 8px;  /* room for the dec/hex toggle on the right */
+      background: #131722;
+      border-radius: 4px;
+      color: #cfd2dc;
+      font-size: 11.5px;
+      line-height: 1.5;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      overflow-x: auto;
+    }
+    .simd-tt-ex-lbl  { color: #5e6679; padding-right: 2px; }
+    .simd-tt-ex-arrow { color: #5e6679; }
+    .simd-tt-ex-val {
+      color: #cfd2dc;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+    .simd-tt-ex-val::after { content: ' '; }
+    /* Thin vertical separators between lane columns (skipping the
+       label-to-first-lane boundary so the labels float free). */
+    .simd-tt-ex-val + .simd-tt-ex-val {
+      border-left: 1px solid #232a39;
+      padding-left: 4px;
+    }
+    /* Thicker separator at sub-vector boundaries inside tuple types. */
+    .simd-tt-ex-val.simd-tt-ex-boundary {
+      border-left: 2px solid #5e6679;
+      padding-left: 6px;
+    }
+    .simd-tt-ex-out { color: #5ec083; }
+    .simd-tt-ex-hexcell { display: none; }
+    .simd-tt-ex.hex .simd-tt-ex-dec { display: none; }
+    .simd-tt-ex.hex .simd-tt-ex-hexcell { display: inline; }
+    .simd-tt-ex-modes {
+      position: absolute;
+      top: 4px;
+      right: 6px;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+    }
+    .simd-tt-ex-mode {
+      background: transparent;
+      border: 0;
+      color: #5e6679;
+      font: 10px ui-monospace, SFMono-Regular, Menlo, monospace;
+      line-height: 13px;
+      padding: 0 4px;
+      cursor: pointer;
+      text-align: center;
+    }
+    .simd-tt-ex-mode.is-active { color: #d8dde7; font-weight: 700; }
+    .simd-tt-ex-mode:focus-visible { outline: none; }
+    /* Old standalone pseudocode rules superseded by .simd-tt-toggles above;
+       leaving a small set for backcompat in case anything still uses them. */
     .simd-hint {
       position: absolute;
       display: none;
@@ -948,8 +1491,8 @@ void saxpy_sve(float a, const float *x, const float *y, float *out, size_t n) {
 (function () {
   if (!window.SimdTooltips) return;
   var names = {"version":1,"count":20,"names":["__m256","_mm256_add_ps","_mm256_fmadd_ps","_mm256_loadu_ps","_mm256_mul_ps","_mm256_set1_ps","_mm256_storeu_ps","float32x4_t","svbool_t","svcntw","svdup_n_f32","svfloat32_t","svld1_f32","svmla_f32_m","svst1_f32","svwhilelt_b32","vdupq_n_f32","vfmaq_f32","vld1q_f32","vst1q_f32"],"types":["__m256","float32x4_t","svbool_t","svfloat32_t"],"ambiguous":{"svwhilelt_b32":["svwhilelt_b32_s32","svwhilelt_b32_s64","svwhilelt_b32_u32","svwhilelt_b32_u64"]}};
-  var data  = {"version":1,"count":19,"records":{"__m256":{"name":"__m256","kind":"type","arch":["x86_64"],"family":["AVX / AVX2"],"definition":"typedef __m256;   // 256-bit single-precision float vector","description":"256-bit packed single-precision float vector.","source":"synth","doc_url":""},"_mm256_add_ps":{"name":"_mm256_add_ps","arch":["x86_64"],"family":["AVX"],"definition":"__m256 _mm256_add_ps(__m256 a, __m256 b)","description":"Add packed single-precision (32-bit) floating-point elements in \"a\" and \"b\", and store the results in \"dst\".","pseudocode":"FOR j := 0 to 7\n\ti := j*32\n\tdst[i+31:i] := a[i+31:i] + b[i+31:i]\nENDFOR\ndst[MAX:256] := 0","source":"intel-iguide","doc_url":"https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_add_ps"},"_mm256_fmadd_ps":{"name":"_mm256_fmadd_ps","arch":["x86_64"],"family":["FMA"],"definition":"__m256 _mm256_fmadd_ps(\n    __m256 a,\n    __m256 b,\n    __m256 c)","description":"Computes a multiply-add of 256-bit vectors of [8 x float].","pseudocode":"FOR j := 0 to 7\n\ti := j*32\n\tdst[i+31:i] := (a[i+31:i] * b[i+31:i]) + c[i+31:i]\nENDFOR\ndst[MAX:256] := 0","source":"intel-iguide","doc_url":"https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_fmadd_ps"},"_mm256_loadu_ps":{"name":"_mm256_loadu_ps","arch":["x86_64"],"family":["AVX"],"definition":"__m256 _mm256_loadu_ps(float const * mem_addr)","description":"Loads 8 single-precision floating point values from an unaligned memory location pointed to by __p into a vector of [8 x float].","pseudocode":"dst[255:0] := MEM[mem_addr+255:mem_addr]\ndst[MAX:256] := 0","source":"intel-iguide","doc_url":"https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_loadu_ps"},"_mm256_mul_ps":{"name":"_mm256_mul_ps","arch":["x86_64"],"family":["AVX"],"definition":"__m256 _mm256_mul_ps(__m256 a, __m256 b)","description":"Multiply packed single-precision (32-bit) floating-point elements in \"a\" and \"b\", and store the results in \"dst\".","pseudocode":"FOR j := 0 to 7\n\ti := j*32\n\tdst[i+31:i] := a[i+31:i] * b[i+31:i]\nENDFOR\ndst[MAX:256] := 0","source":"intel-iguide","doc_url":"https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_mul_ps"},"_mm256_set1_ps":{"name":"_mm256_set1_ps","arch":["x86_64"],"family":["AVX"],"definition":"__m256 _mm256_set1_ps(float a)","description":"Constructs a 256-bit floating-point vector of [8 x float], with each of the eight single-precision floating-point vector elements set to the specified single-precision floating-point value.","pseudocode":"FOR j := 0 to 7\n\ti := j*32\n\tdst[i+31:i] := a[31:0]\nENDFOR\ndst[MAX:256] := 0","source":"intel-iguide","doc_url":"https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_set1_ps"},"_mm256_storeu_ps":{"name":"_mm256_storeu_ps","arch":["x86_64"],"family":["AVX"],"definition":"void _mm256_storeu_ps(float * mem_addr, __m256 a)","description":"Stores single-precision floating point values from a 256-bit vector of [8 x float] to an unaligned memory location pointed to by __p.","pseudocode":"MEM[mem_addr+255:mem_addr] := a[255:0]","source":"intel-iguide","doc_url":"https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_storeu_ps"},"float32x4_t":{"name":"float32x4_t","kind":"type","arch":["aarch32","aarch64"],"family":["Neon"],"definition":"typedef float32x4_t;   // 4 lanes of 32-bit floating-point (128-bit vector)","description":"4 lanes of 32-bit floating-point packed into a 128-bit vector.","source":"synth","doc_url":""},"svbool_t":{"name":"svbool_t","kind":"type","arch":["aarch64"],"family":["SVE"],"definition":"typedef svbool_t;   // SVE predicate (governing mask)","description":"SVE predicate (mask).","source":"synth","doc_url":""},"svcntw":{"name":"svcntw","arch":["aarch64"],"family":["SME and SME2","SVE"],"definition":"uint64_t svcntw(void)","description":"Count the number of 32-bit elements in a vector","pseudocode":"Return the number of 32-bit elements in a full vector.The underlying instruction takes a constant multiplier in the range [1, 16], which compilers can use to optimize multiplications of the function's return value.","source":"arm-acle","doc_url":"https://developer.arm.com/architectures/instruction-sets/intrinsics/svcntw"},"svdup_n_f32":{"name":"svdup_n_f32","arch":["aarch64"],"family":["SME and SME2","SVE"],"definition":"svfloat32_t svdup_n_f32(float32_t op)","description":"Broadcast a scalar value","pseudocode":"Return a vector in which each element i contains op.[1] This is true if the value is in the range [-128, 127] or is a multiple of 256 in the range [-32768, 32512][2] This is true if op is a floating-point immediate value expressable as ±n×2r, where n and r are integers such that 16 ≤ n ≤ 31 and -7 ≤ r ≤ 0.  In other words, this instruction requires op to have a normalized binary floating-point encoding with a sign bit, a 3-bit exponent, and a 4-bit fractional part.","source":"arm-acle","doc_url":"https://developer.arm.com/architectures/instruction-sets/intrinsics/svdup_n_f32"},"svfloat32_t":{"name":"svfloat32_t","kind":"type","arch":["aarch64"],"family":["SVE"],"definition":"typedef svfloat32_t;   // scalable vector of 32-bit floating-point","description":"Scalable vector of 32-bit floating-point.","source":"synth","doc_url":""},"svld1_f32":{"name":"svld1_f32","arch":["aarch64"],"family":["SME and SME2","SVE"],"definition":"svfloat32_t svld1_f32(svbool_t pg, const float32_t *base)","description":"Unextended load","pseudocode":"Return a vector in which each active element i contains base[i] and in which all other elements are zero.  Do not access memory for inactive elements.","source":"arm-acle","doc_url":"https://developer.arm.com/architectures/instruction-sets/intrinsics/svld1_f32"},"svmla_f32_m":{"name":"svmla_f32_m","arch":["aarch64"],"family":["SME and SME2","SVE"],"definition":"svfloat32_t svmla_f32_m(\n    svbool_t pg,\n    svfloat32_t op1,\n    svfloat32_t op2,\n    svfloat32_t op3)","description":"Multiply-add, addend first","pseudocode":"Return a vector in which each active element i contains the value:op1[i] + op2[i] * op3[i]Take the inactive elements of the result from the corresponding elements of op1.The multiplication and addition are fused, with no intermediate rounding after the multiplication.Active signaling NaNs trigger an IEEE Invalid exception but quiet NaNs do not. Multiplying an infinity by zero also triggers an IEEE Invalid exception, as does adding +∞ and -∞ together.","source":"arm-acle","doc_url":"https://developer.arm.com/architectures/instruction-sets/intrinsics/svmla_f32_m"},"svst1_f32":{"name":"svst1_f32","arch":["aarch64"],"family":["SME and SME2","SVE"],"definition":"void svst1_f32(\n    svbool_t pg,\n    float32_t *base,\n    svfloat32_t data)","description":"Non-truncating store","pseudocode":"For each active element i, store data[i] to base[i]. Do not access memory for inactive elements.","source":"arm-acle","doc_url":"https://developer.arm.com/architectures/instruction-sets/intrinsics/svst1_f32"},"vdupq_n_f32":{"name":"vdupq_n_f32","arch":["aarch32","aarch64"],"family":["Neon"],"definition":"float32x4_t vdupq_n_f32(float32_t value)","description":"Duplicate vector element to vector or scalar.","pseudocode":"CheckFPAdvSIMDEnabled64();\nbits(idxdsize) operand = V[n];\nbits(datasize) result;\nbits(esize) element;\n\nelement = Elem[operand, index, esize];\nfor e = 0 to elements-1\n    Elem[result, e, esize] = element;\nV[d] = result;","source":"arm-acle","doc_url":"https://developer.arm.com/architectures/instruction-sets/intrinsics/vdupq_n_f32"},"vfmaq_f32":{"name":"vfmaq_f32","arch":["aarch32","aarch64"],"family":["Neon"],"definition":"float32x4_t vfmaq_f32(\n    float32x4_t a,\n    float32x4_t b,\n    float32x4_t c)","description":"Floating-point fused Multiply-Add to accumulator (vector).","pseudocode":"CheckFPAdvSIMDEnabled64();\nbits(datasize) operand1 = V[n];\nbits(datasize) operand2 = V[m];\nbits(datasize) operand3 = V[d];\nbits(datasize) result;\nbits(esize) element1;\nbits(esize) element2;\n\nfor e = 0 to elements-1\n    element1 = Elem[operand1, e, esize];\n    element2 = Elem[operand2, e, esize];\n    if sub_op then element1 = FPNeg(element1);\n    Elem[result, e, esize] = FPMulAdd(Elem[operand3, e, esize], element1, element2, FPCR[]);\n\nV[d] = result;","source":"arm-acle","doc_url":"https://developer.arm.com/architectures/instruction-sets/intrinsics/vfmaq_f32"},"vld1q_f32":{"name":"vld1q_f32","arch":["aarch32","aarch64"],"family":["Neon"],"definition":"float32x4_t vld1q_f32(float32_t const * ptr)","description":"Load multiple single-element structures to one, two, three, or four registers.","pseudocode":"CheckFPAdvSIMDEnabled64();\n\nbits(64) address;\nbits(64) offs;\nbits(datasize) rval;\ninteger tt;\nconstant integer ebytes = esize DIV 8;\n\nif HaveMTE2Ext() then\n    SetTagCheckedInstruction(tag_checked);\n\nif n == 31 then\n    CheckSPAlignment();\n    address = SP[];\nelse\n    address = X[n];\n\noffs = Zeros();\nfor r = 0 to rpt-1\n    for e = 0 to elements-1\n        tt = (t + r) MOD 32;\n        for s = 0 to selem-1\n            rval = V[tt];\n            if memop == MemOp_LOAD then\n                Elem[rval, e, esize] = Mem[address + offs, ebytes, AccType_VEC];\n                V[tt] = rval;\n            else // memop == MemOp_STORE\n                Mem[address + offs, ebytes, AccType_VEC] = Elem[rval, e, esize];\n            offs = offs + ebytes;\n            tt = (tt + 1) MOD 32;\n\nif wback then\n    if m != 31 then\n        offs = X[m];\n    if n == 31 then\n        SP[] = address + offs;\n    else\n        X[n] = address + offs;","source":"arm-acle","doc_url":"https://developer.arm.com/architectures/instruction-sets/intrinsics/vld1q_f32"},"vst1q_f32":{"name":"vst1q_f32","arch":["aarch32","aarch64"],"family":["Neon"],"definition":"void vst1q_f32(float32_t * ptr, float32x4_t val)","description":"Store multiple single-element structures from one, two, three, or four registers.","pseudocode":"CheckFPAdvSIMDEnabled64();\n\nbits(64) address;\nbits(64) offs;\nbits(datasize) rval;\ninteger tt;\nconstant integer ebytes = esize DIV 8;\n\nif HaveMTE2Ext() then\n    SetTagCheckedInstruction(tag_checked);\n\nif n == 31 then\n    CheckSPAlignment();\n    address = SP[];\nelse\n    address = X[n];\n\noffs = Zeros();\nfor r = 0 to rpt-1\n    for e = 0 to elements-1\n        tt = (t + r) MOD 32;\n        for s = 0 to selem-1\n            rval = V[tt];\n            if memop == MemOp_LOAD then\n                Elem[rval, e, esize] = Mem[address + offs, ebytes, AccType_VEC];\n                V[tt] = rval;\n            else // memop == MemOp_STORE\n                Mem[address + offs, ebytes, AccType_VEC] = Elem[rval, e, esize];\n            offs = offs + ebytes;\n            tt = (tt + 1) MOD 32;\n\nif wback then\n    if m != 31 then\n        offs = X[m];\n    if n == 31 then\n        SP[] = address + offs;\n    else\n        X[n] = address + offs;","source":"arm-acle","doc_url":"https://developer.arm.com/architectures/instruction-sets/intrinsics/vst1q_f32"}}};
-  var opts  = { on: "hover+?", wrap: false, pseudocode: "collapsed", names: names, data: data };
+  var data  = {"version":1,"count":19,"records":{"__m256":{"name":"__m256","kind":"type","arch":["x86_64"],"family":["AVX / AVX2"],"definition":"typedef __m256;   // 256-bit single-precision float vector","description":"256-bit packed single-precision float vector.","source":"synth","doc_url":""},"_mm256_add_ps":{"name":"_mm256_add_ps","arch":["x86_64"],"family":["AVX"],"definition":"__m256 _mm256_add_ps(__m256 a, __m256 b)","description":"Add packed single-precision (32-bit) floating-point elements in \"a\" and \"b\", and store the results in \"dst\".","pseudocode":"FOR j := 0 to 7\n\ti := j*32\n\tdst[i+31:i] := a[i+31:i] + b[i+31:i]\nENDFOR\ndst[MAX:256] := 0","source":"intel-iguide","doc_url":"https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_add_ps","cluster":"C1121"},"_mm256_fmadd_ps":{"name":"_mm256_fmadd_ps","arch":["x86_64"],"family":["FMA"],"definition":"__m256 _mm256_fmadd_ps(\n    __m256 a,\n    __m256 b,\n    __m256 c)","description":"Computes a multiply-add of 256-bit vectors of [8 x float].","pseudocode":"FOR j := 0 to 7\n\ti := j*32\n\tdst[i+31:i] := (a[i+31:i] * b[i+31:i]) + c[i+31:i]\nENDFOR\ndst[MAX:256] := 0","source":"intel-iguide","doc_url":"https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_fmadd_ps"},"_mm256_loadu_ps":{"name":"_mm256_loadu_ps","arch":["x86_64"],"family":["AVX"],"definition":"__m256 _mm256_loadu_ps(float const * mem_addr)","description":"Loads 8 single-precision floating point values from an unaligned memory location pointed to by __p into a vector of [8 x float].","pseudocode":"dst[255:0] := MEM[mem_addr+255:mem_addr]\ndst[MAX:256] := 0","source":"intel-iguide","doc_url":"https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_loadu_ps","cluster":"C1152"},"_mm256_mul_ps":{"name":"_mm256_mul_ps","arch":["x86_64"],"family":["AVX"],"definition":"__m256 _mm256_mul_ps(__m256 a, __m256 b)","description":"Multiply packed single-precision (32-bit) floating-point elements in \"a\" and \"b\", and store the results in \"dst\".","pseudocode":"FOR j := 0 to 7\n\ti := j*32\n\tdst[i+31:i] := a[i+31:i] * b[i+31:i]\nENDFOR\ndst[MAX:256] := 0","source":"intel-iguide","doc_url":"https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_mul_ps"},"_mm256_set1_ps":{"name":"_mm256_set1_ps","arch":["x86_64"],"family":["AVX"],"definition":"__m256 _mm256_set1_ps(float a)","description":"Constructs a 256-bit floating-point vector of [8 x float], with each of the eight single-precision floating-point vector elements set to the specified single-precision floating-point value.","pseudocode":"FOR j := 0 to 7\n\ti := j*32\n\tdst[i+31:i] := a[31:0]\nENDFOR\ndst[MAX:256] := 0","source":"intel-iguide","doc_url":"https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_set1_ps","cluster":"C1171"},"_mm256_storeu_ps":{"name":"_mm256_storeu_ps","arch":["x86_64"],"family":["AVX"],"definition":"void _mm256_storeu_ps(float * mem_addr, __m256 a)","description":"Stores single-precision floating point values from a 256-bit vector of [8 x float] to an unaligned memory location pointed to by __p.","pseudocode":"MEM[mem_addr+255:mem_addr] := a[255:0]","source":"intel-iguide","doc_url":"https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm256_storeu_ps","cluster":"C1158"},"float32x4_t":{"name":"float32x4_t","kind":"type","arch":["aarch32","aarch64"],"family":["Neon"],"definition":"typedef float32x4_t;   // 4 lanes of 32-bit floating-point (128-bit vector)","description":"4 lanes of 32-bit floating-point packed into a 128-bit vector.","source":"synth","doc_url":""},"svbool_t":{"name":"svbool_t","kind":"type","arch":["aarch64"],"family":["SVE"],"definition":"typedef svbool_t;   // SVE predicate (governing mask)","description":"SVE predicate (mask).","source":"synth","doc_url":""},"svcntw":{"name":"svcntw","arch":["aarch64"],"family":["SME and SME2","SVE"],"definition":"uint64_t svcntw(void)","description":"Count the number of 32-bit elements in a vector","pseudocode":"Return the number of 32-bit elements in a full vector.The underlying instruction takes a constant multiplier in the range [1, 16], which compilers can use to optimize multiplications of the function's return value.","source":"arm-acle","doc_url":"https://developer.arm.com/architectures/instruction-sets/intrinsics/svcntw"},"svdup_n_f32":{"name":"svdup_n_f32","arch":["aarch64"],"family":["SME and SME2","SVE"],"definition":"svfloat32_t svdup_n_f32(float32_t op)","description":"Broadcast a scalar value","pseudocode":"Return a vector in which each element i contains op.[1] This is true if the value is in the range [-128, 127] or is a multiple of 256 in the range [-32768, 32512][2] This is true if op is a floating-point immediate value expressable as ±n×2r, where n and r are integers such that 16 ≤ n ≤ 31 and -7 ≤ r ≤ 0.  In other words, this instruction requires op to have a normalized binary floating-point encoding with a sign bit, a 3-bit exponent, and a 4-bit fractional part.","source":"arm-acle","doc_url":"https://developer.arm.com/architectures/instruction-sets/intrinsics/svdup%5B_n%5D_f32","cluster":"C366"},"svfloat32_t":{"name":"svfloat32_t","kind":"type","arch":["aarch64"],"family":["SVE"],"definition":"typedef svfloat32_t;   // scalable vector of 32-bit floating-point","description":"Scalable vector of 32-bit floating-point.","source":"synth","doc_url":""},"svld1_f32":{"name":"svld1_f32","arch":["aarch64"],"family":["SME and SME2","SVE"],"definition":"svfloat32_t svld1_f32(svbool_t pg, const float32_t *base)","description":"Unextended load","pseudocode":"Return a vector in which each active element i contains base[i] and in which all other elements are zero.  Do not access memory for inactive elements.","source":"arm-acle","doc_url":"https://developer.arm.com/architectures/instruction-sets/intrinsics/svld1%5B_f32%5D","cluster":"C433"},"svmla_f32_m":{"name":"svmla_f32_m","arch":["aarch64"],"family":["SME and SME2","SVE"],"definition":"svfloat32_t svmla_f32_m(\n    svbool_t pg,\n    svfloat32_t op1,\n    svfloat32_t op2,\n    svfloat32_t op3)","description":"Multiply-add, addend first","pseudocode":"Return a vector in which each active element i contains the value:op1[i] + op2[i] * op3[i]Take the inactive elements of the result from the corresponding elements of op1.The multiplication and addition are fused, with no intermediate rounding after the multiplication.Active signaling NaNs trigger an IEEE Invalid exception but quiet NaNs do not. Multiplying an infinity by zero also triggers an IEEE Invalid exception, as does adding +∞ and -∞ together.","source":"arm-acle","doc_url":"https://developer.arm.com/architectures/instruction-sets/intrinsics/svmla%5B_f32%5D_m","cluster":"C599"},"svst1_f32":{"name":"svst1_f32","arch":["aarch64"],"family":["SME and SME2","SVE"],"definition":"void svst1_f32(\n    svbool_t pg,\n    float32_t *base,\n    svfloat32_t data)","description":"Non-truncating store","pseudocode":"For each active element i, store data[i] to base[i]. Do not access memory for inactive elements.","source":"arm-acle","doc_url":"https://developer.arm.com/architectures/instruction-sets/intrinsics/svst1%5B_f32%5D","cluster":"C969"},"vdupq_n_f32":{"name":"vdupq_n_f32","arch":["aarch32","aarch64"],"family":["Neon"],"definition":"float32x4_t vdupq_n_f32(float32_t value)","description":"Duplicate vector element to vector or scalar.","pseudocode":"CheckFPAdvSIMDEnabled64();\nbits(idxdsize) operand = V[n];\nbits(datasize) result;\nbits(esize) element;\n\nelement = Elem[operand, index, esize];\nfor e = 0 to elements-1\n    Elem[result, e, esize] = element;\nV[d] = result;","source":"arm-acle","doc_url":"https://developer.arm.com/architectures/instruction-sets/intrinsics/vdupq_n_f32","example":{"inputs":[{"name":"value","type":"float32_t","values":[1.0]}],"output":{"type":"float32x4_t","bytes_hex":"0000803f0000803f0000803f0000803f","values":[1.0,1.0,1.0,1.0]},"verified_via":"fold"},"cluster":"C72"},"vfmaq_f32":{"name":"vfmaq_f32","arch":["aarch32","aarch64"],"family":["Neon"],"definition":"float32x4_t vfmaq_f32(\n    float32x4_t a,\n    float32x4_t b,\n    float32x4_t c)","description":"Floating-point fused Multiply-Add to accumulator (vector).","pseudocode":"CheckFPAdvSIMDEnabled64();\nbits(datasize) operand1 = V[n];\nbits(datasize) operand2 = V[m];\nbits(datasize) operand3 = V[d];\nbits(datasize) result;\nbits(esize) element1;\nbits(esize) element2;\n\nfor e = 0 to elements-1\n    element1 = Elem[operand1, e, esize];\n    element2 = Elem[operand2, e, esize];\n    if sub_op then element1 = FPNeg(element1);\n    Elem[result, e, esize] = FPMulAdd(Elem[operand3, e, esize], element1, element2, FPCR[]);\n\nV[d] = result;","source":"arm-acle","doc_url":"https://developer.arm.com/architectures/instruction-sets/intrinsics/vfmaq_f32","example":{"inputs":[{"name":"a","type":"float32x4_t","values":[1.0,2.0,3.0,4.0]},{"name":"b","type":"float32x4_t","values":[0.5,-0.25,0.125,-0.0625]},{"name":"c","type":"float32x4_t","values":[0.5,-0.25,0.125,-0.0625]}],"output":{"type":"float32x4_t","bytes_hex":"0000a03f000004400000414000208040","values":[1.25,2.0625,3.015625,4.00390625]},"verified_via":"fold"},"cluster":"C15"},"vld1q_f32":{"name":"vld1q_f32","arch":["aarch32","aarch64"],"family":["Neon"],"definition":"float32x4_t vld1q_f32(float32_t const * ptr)","description":"Load multiple single-element structures to one, two, three, or four registers.","pseudocode":"CheckFPAdvSIMDEnabled64();\n\nbits(64) address;\nbits(64) offs;\nbits(datasize) rval;\ninteger tt;\nconstant integer ebytes = esize DIV 8;\n\nif HaveMTE2Ext() then\n    SetTagCheckedInstruction(tag_checked);\n\nif n == 31 then\n    CheckSPAlignment();\n    address = SP[];\nelse\n    address = X[n];\n\noffs = Zeros();\nfor r = 0 to rpt-1\n    for e = 0 to elements-1\n        tt = (t + r) MOD 32;\n        for s = 0 to selem-1\n            rval = V[tt];\n            if memop == MemOp_LOAD then\n                Elem[rval, e, esize] = Mem[address + offs, ebytes, AccType_VEC];\n                V[tt] = rval;\n            else // memop == MemOp_STORE\n                Mem[address + offs, ebytes, AccType_VEC] = Elem[rval, e, esize];\n            offs = offs + ebytes;\n            tt = (tt + 1) MOD 32;\n\nif wback then\n    if m != 31 then\n        offs = X[m];\n    if n == 31 then\n        SP[] = address + offs;\n    else\n        X[n] = address + offs;","source":"arm-acle","doc_url":"https://developer.arm.com/architectures/instruction-sets/intrinsics/vld1q_f32","example":{"inputs":[{"name":"ptr","type":"float32_t const *","values":[1.0,2.0,3.0,4.0]}],"output":{"type":"float32x4_t","bytes_hex":"0000803f000000400000404000008040","values":[1.0,2.0,3.0,4.0]},"verified_via":"fold"},"cluster":"C74"},"vst1q_f32":{"name":"vst1q_f32","arch":["aarch32","aarch64"],"family":["Neon"],"definition":"void vst1q_f32(float32_t * ptr, float32x4_t val)","description":"Store multiple single-element structures from one, two, three, or four registers.","pseudocode":"CheckFPAdvSIMDEnabled64();\n\nbits(64) address;\nbits(64) offs;\nbits(datasize) rval;\ninteger tt;\nconstant integer ebytes = esize DIV 8;\n\nif HaveMTE2Ext() then\n    SetTagCheckedInstruction(tag_checked);\n\nif n == 31 then\n    CheckSPAlignment();\n    address = SP[];\nelse\n    address = X[n];\n\noffs = Zeros();\nfor r = 0 to rpt-1\n    for e = 0 to elements-1\n        tt = (t + r) MOD 32;\n        for s = 0 to selem-1\n            rval = V[tt];\n            if memop == MemOp_LOAD then\n                Elem[rval, e, esize] = Mem[address + offs, ebytes, AccType_VEC];\n                V[tt] = rval;\n            else // memop == MemOp_STORE\n                Mem[address + offs, ebytes, AccType_VEC] = Elem[rval, e, esize];\n            offs = offs + ebytes;\n            tt = (tt + 1) MOD 32;\n\nif wback then\n    if m != 31 then\n        offs = X[m];\n    if n == 31 then\n        SP[] = address + offs;\n    else\n        X[n] = address + offs;","source":"arm-acle","doc_url":"https://developer.arm.com/architectures/instruction-sets/intrinsics/vst1q_f32","example":{"inputs":[{"name":"val","type":"float32x4_t","values":[0.5,-0.25,0.125,-0.0625]}],"output":{"type":"std::array<float32_t, 4>","bytes_hex":"0000003f000080be0000003e000080bd","values":[0.5,-0.25,0.125,-0.0625]},"verified_via":"fold"},"cluster":"C74"}}};
+  var opts  = { on: "hover", wrap: false, pseudocode: "collapsed", names: names, data: data };
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', function () { SimdTooltips.init(opts); });
   } else {
