@@ -398,6 +398,53 @@ button.tag-filter:hover, button.tag-filter:focus-visible {
     border-color: var(--accent);
     outline: none;
 }
+.ex {
+    position: relative;
+    display: grid;
+    column-gap: 6px;
+    row-gap: 2px;
+    margin-top: 4px;
+    padding: 8px 44px 8px 10px;  /* room for the dec/hex toggle on the right */
+    background: var(--code-bg);
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.88em;
+    line-height: 1.55;
+    color: var(--fg);
+    overflow-x: auto;
+}
+.ex-lbl  { color: var(--muted); padding-right: 2px; }
+.ex-arrow { color: var(--muted); }
+.ex-val {
+    color: var(--fg);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+.ex-out { color: #2c8a55; font-weight: 500; }
+.ex-hexcell { display: none; }
+.ex.hex .ex-dec { display: none; }
+.ex.hex .ex-hexcell { display: inline; }
+.ex-modes {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+}
+.ex-mode {
+    background: transparent;
+    border: 0;
+    color: var(--muted);
+    font: 0.74em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    line-height: 14px;
+    padding: 0 4px;
+    cursor: pointer;
+    text-align: center;
+}
+.ex-mode.is-active { color: var(--fg); font-weight: 700; }
+.ex-mode:focus-visible { outline: none; }
+
 .card .upstream-link {
     display: inline-block;
     font-size: 0.92em;

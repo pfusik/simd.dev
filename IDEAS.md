@@ -14,6 +14,7 @@ Each entry should explain *why* before *what*.
 **[Considered](#considered)**
 - [Plain-formula explanation per intrinsic (LLM with verifier)](#plain-formula-explanation-per-intrinsic-llm-with-verifier)
 - [Verifier: compile-and-run example code](#verifier-compile-and-run-example-code)
+- [LLM-as-judge for prose explanations](#llm-as-judge-for-prose-explanations)
 - [Cross-arch mapping table (Intel ↔ NEON via simde + sse2neon)](#cross-arch-mapping-table-intel--neon-via-simde--sse2neon)
 - [Per-intrinsic static pages with worked examples](#per-intrinsic-static-pages-with-worked-examples)
 - [Live editable examples per intrinsic (CE iframe)](#live-editable-examples-per-intrinsic-ce-iframe)
@@ -89,12 +90,13 @@ predication, FP rounding, SVE scalable lengths, AES/SHA fixed transforms).
 
 **Why:** the LLM pass above is only as trustworthy as its outputs. The
 authoritative ground truth for "what does this intrinsic produce on
-input X?" is the actual compiled instruction. Local clang / gcc with a
-standard cross-compile + emulator toolchain is the simplest path: no
-network round-trip, no rate limits, no third-party service in the
-critical build path. **Cache results in the repo** so subsequent
-rebuilds (and contributors who don't have the cross-toolchain) reuse
-the verified bytes offline.
+input X?" is the actual compiled instruction. Local clang / gcc, with
+clang's `-target` for cross-compile, is the simplest path: no network
+round-trip, no rate limits, no third-party service in the critical
+build path, **and no emulator** for the cases clang's constant folder
+can handle (which is most of them). **Cache results in the repo** so
+subsequent rebuilds (and contributors who don't have the cross-toolchain)
+reuse the verified bytes offline.
 
 **Why this beats writing an interpreter for the upstream DSL** (the
 original sketch in this slot):
@@ -109,41 +111,112 @@ original sketch in this slot):
   verifiable — including SVE / SVE2 / SME, AES / SHA, AMX, bf16 /
   fp16.
 
-**Pipeline:**
+**Pipeline (primary path — constant-folding):**
 - LLM emits per cluster member
   `{example_inputs, example_outputs_claimed}` (already needed for the
   worked-example display).
-- Codegen a tiny C++ program per (intrinsic, example) — generated and
-  thrown away, never committed:
+- Codegen a tiny C++ program where the result is a `const`-initialized
+  global so clang folds the call into `.rodata` at compile time —
+  generated and thrown away, never committed:
   ```c++
   #include <arm_neon.h>
-  #include <cstdio>
-  int main() {
-    int8x16_t a = { 1, -2, 3, ... };
-    int8x16_t b = { ... };
-    int8x16_t r = vqaddq_s8(a, b);
-    uint8_t buf[16]; vst1q_u8(buf, vreinterpretq_u8_s8(r));
-    for (int i = 0; i < 16; i++) printf("%02x", buf[i]);
-  }
+  alignas(16) const uint8_t RESULT[16] = []{
+      const int8x16_t a = { 1, -2, 3, ... };
+      const int8x16_t b = { ... };
+      uint8_t buf[16];
+      vst1q_u8(buf, vreinterpretq_u8_s8(vqaddq_s8(a, b)));
+      // returned via std::to_array equivalent
+      return *reinterpret_cast<const std::array<uint8_t,16>*>(buf);
+  }();
   ```
-- Compile with local clang + the same `-march` we already emit for
-  the in-tooltip CE links (flags already calibrated by the Compiler
-  Explorer URL work — see Done).
-- Execute:
-  - **x86 host:** native for SSE / AVX / AVX2 / AES / SHA; native or
-    [Intel SDE](https://www.intel.com/content/www/us/en/developer/articles/tool/software-development-emulator.html)
-    for any AVX-512 subset + AMX.
-  - **aarch64:** native on Apple Silicon for NEON / fp16 / bf16; QEMU
-    for SVE / SVE2; QEMU + real M4 hardware fallback for SME.
-- Parse stdout, byte-compare to the LLM's claim. Mismatch →
-  re-prompt, downgrade to upstream-pseudocode-only display, or flag
-  for manual review.
-- **Cache committed to the repo** at `data/verifier-cache/<key>.json`,
-  keyed by `(intrinsic, example_inputs_hash, compiler_id, march)`.
-  Refetch only on cache miss (new LLM output, new toolchain version,
-  or new example inputs). Means rebuilds are offline; contributors
-  and CI don't need the cross-toolchain; the verified bytes are part
-  of the repo's source-of-truth.
+  (Exact form depends on whether the intrinsic itself can appear in a
+  constexpr context; in practice a non-constexpr `const` global with
+  `-O2` is enough — clang folds the result into `.rodata` regardless.)
+- Cross-compile with clang's `-target <triple>` + the same `-march` we
+  already emit for the in-tooltip CE links (flags already calibrated
+  by the Compiler Explorer URL work — see Done). **No emulator
+  needed**: cross-compiling x86 from aarch64 (or vice versa) only
+  needs a clang frontend — the bytes drop out of the asm, no execution.
+- Disassemble (`llvm-objdump -s` or asm output), parse `.rodata` for
+  the `RESULT:` label, read the bytes that follow, byte-compare to the
+  LLM's claim. Mismatch → re-prompt, downgrade to
+  upstream-pseudocode-only display, or flag for manual review.
+
+**Fallback path — actual execution:** for the non-foldable tail (loads
+from non-const memory, `_rdrand` / `_rdtsc` / `_xgetbv`, AMX tile ops,
+a chunk of predicated SVE):
+- Native execution where the host arch matches.
+- [Intel SDE](https://www.intel.com/content/www/us/en/developer/articles/tool/software-development-emulator.html)
+  for AVX-512 / AMX on a non-supporting x86 host.
+- QEMU for SVE / SVE2 / SME from a non-aarch64 host.
+Reserved for the cases where folding fails — most of the catalog
+should never hit this.
+- **Cache committed to the repo** so rebuilds are offline and
+  contributors / CI don't need the cross-toolchain. Refetch only on
+  cache miss (new LLM output, new toolchain version, or new example
+  inputs). Layout and schema below.
+
+**Cache layout — auto vs. hand-curated:**
+
+```
+data/verifier-cache/<family>.jsonl       # auto-generated, regen rewrites freely
+data/verifier-overrides/<family>.jsonl   # hand-curated, never written by automation
+```
+
+One JSONL shard per arch family (`neon`, `sve`, `sve2`, `sme`, `sse2`,
+`avx2`, `avx512f`, `amx`, …) — mirrors the existing `family` field on
+each record. Lines are sorted by `(intrinsic, inputs_hash)` for stable
+diffs; ~3k cluster reps × ~3 examples → ~9k lines spread over ~25
+shards, ~50–500 KB per shard.
+
+**Two-directory split is filesystem-level safety:** the regen script
+literally never opens `verifier-overrides/`, so a buggy refresh can't
+clobber human edits. Empty override shards are fine — most stay empty.
+Reviewers get the full hand-edit history with `git log -- data/verifier-overrides/`.
+
+**Per-line schema (JSONL):**
+
+- `intrinsic` *(both)* — canonical intrinsic name (e.g. `vqaddq_s8`).
+  Primary lookup field.
+- `inputs_hash` *(both)* — short SHA1 prefix (8 hex) over the
+  canonicalized `inputs`. Co-key with `intrinsic`.
+- `inputs` *(both)* — list referencing the input palette by name
+  (`["BOUNDARIES","IDENTITY"]`); fallback `{"raw":"<hex>"}` entries
+  for one-off bytes that don't fit a palette pattern.
+- `output_bytes` *(both)* — list of hex strings, one per output vector
+  (most intrinsics return a single vector, but `vld2q_*` etc. return
+  multiple). Verified ground truth.
+- `compiler_id` *(cache only)* — godbolt-style compiler ID used to
+  verify (e.g. `armv8-full-cclang-trunk`). Cache-invalidation field.
+- `march` *(cache only)* — march flags string (e.g.
+  `+fp16+bf16+i8mm+dotprod+crypto`). Cache-invalidation field.
+- `verified_at` *(cache only)* — ISO date of verification. Telemetry /
+  staleness signal.
+- `note` *(override only, required)* — why this override exists. Even
+  one sentence is enough; future-you will want to know what made the
+  auto-generated answer wrong.
+- `added_by`, `added_at` *(override only, optional)* — who hand-curated
+  and when.
+
+**Lookup semantics:**
+
+- Cache lookup key: `(intrinsic, inputs_hash, compiler_id, march)` —
+  exact match; invalidates on any toolchain change.
+- Override lookup key: `(intrinsic, inputs_hash)` — broader; ignores
+  compiler/march so a hand-curated truth survives toolchain upgrades
+  without re-curation.
+- Build-time precedence: override wins. Cache miss + no override → run
+  the verifier, write the result back to the cache shard.
+
+**Examples** (one line each in the actual file):
+
+```jsonc
+// data/verifier-cache/neon.jsonl
+{"intrinsic":"vqaddq_s8","inputs_hash":"bd9f12a6","inputs":["BOUNDARIES","IDENTITY"],"output_bytes":["7f7f7f7f80808080..."],"compiler_id":"armv8-full-cclang-trunk","march":"+fp16+bf16+i8mm+dotprod+crypto","verified_at":"2026-05-03"}
+
+// data/verifier-overrides/neon.jsonl
+{"intrinsic":"vrndnq_f32","inputs_hash":"a4421f88","inputs":["FP_BOUNDARIES"],"output_bytes":["00000000..."],"note":"LLM kept claiming round-half-up; ARMARM specifies round-to-nearest-even. Hand-verified.","added_by":"marcin","added_at":"2026-05-03"}
+```
 
 **Compiler Explorer as backup:** for any architecture / extension
 awkward to cover locally (e.g. a contributor on x86 without QEMU
@@ -166,6 +239,47 @@ refresh stays on whoever has the local rig set up.
   records; cluster siblings inherit via type-substitution from the
   rep. With the cache committed, steady-state rebuilds touch ~zero
   programs — only on LLM-output churn.
+
+## LLM-as-judge for prose explanations
+
+**Why:** the byte-level verifier above proves the *numerical* output of
+each intrinsic. It cannot catch hallucinations in the *prose* — claiming
+"saturating" when the op is wrap-around, mis-stating the rounding mode,
+inventing semantic edge cases that don't exist, etc. Wrong bytes are
+easy to spot; wrong-but-confident English is much harder, and readers
+tend to trust it. A second LLM pass acting as a judge catches the
+prose-level mistakes the verifier can't.
+
+**Sketch:**
+- After the formula-pass LLM emits prose for a cluster, run a critique
+  pass with a *different model family* (e.g. if Claude produces,
+  Gemini judges; or vice versa). Same-family judging is much more
+  correlated with same-family producing — the cross-family pairing is
+  the cheap insurance.
+- Judge prompt context: signature + upstream pseudocode + verified
+  byte-level worked example (from the verifier above) + the prose
+  under review.
+- Judge scores on three axes:
+  - **Accuracy** — does the prose contradict the pseudocode or the
+    verified bytes?
+  - **Completeness** — does it mention saturation / rounding /
+    predication / out-of-range behavior when those apply?
+  - **Clarity** — is the one-liner formula present, correct, and
+    readable?
+- Below threshold → re-prompt the producer with the judge's specific
+  objections; or downgrade to upstream-pseudocode-only display; or
+  flag for manual review.
+- Score + reasoning logged alongside the prose in the LLM cache so
+  reviewers can sample and tune.
+
+**Caveats:**
+- Judges are not infallible — manual spot-check 1-3% of judge-approved
+  entries.
+- Cost ~equal to the producer pass; smaller / cheaper judge models
+  (Haiku-tier, Gemini Flash) are usually enough for scoring.
+- Judges over-flag stylistic preferences if the prompt isn't tight.
+  Lock the judge prompt to objective criteria (contradicts /
+  omits / unclear), not "is this well-written?"
 
 ## Cross-arch mapping table (Intel ↔ NEON via simde + sse2neon)
 

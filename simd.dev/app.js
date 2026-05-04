@@ -68,6 +68,19 @@
         // variant chips (load that sibling's card), and family/arch tag
         // chips (toggle the corresponding filter).
         $card.addEventListener('click', (ev) => {
+            const modeBtn = ev.target.closest('button.ex-mode[data-mode]');
+            if (modeBtn) {
+                const ex = modeBtn.closest('.ex');
+                if (ex) {
+                    const isHex = ex.classList.toggle('hex');
+                    for (const b of ex.querySelectorAll('button.ex-mode')) {
+                        const active = (b.dataset.mode === 'hex') === isHex;
+                        b.classList.toggle('is-active', active);
+                        b.setAttribute('aria-pressed', active ? 'true' : 'false');
+                    }
+                }
+                return;
+            }
             const tab = ev.target.closest('button.card-tab[data-tab]');
             if (tab) {
                 const id = tab.dataset.tab;
@@ -325,6 +338,10 @@
             tabs.push({ id: 'pc', label: 'pseudocode',
                 body: `<pre class="card-pc-body">${escapeHtml(rec.pseudocode)}</pre>` });
         }
+        if (rec.example) {
+            tabs.push({ id: 'ex', label: 'example',
+                body: renderExample(rec.example) });
+        }
         if (rec.cluster && clusters && clusters[rec.cluster]) {
             const siblings = clusters[rec.cluster].filter(n => n !== name);
             if (siblings.length > 0) {
@@ -448,4 +465,82 @@
             ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     }
     function escapeAttr(s) { return escapeHtml(s); }
+    function renderExample(ex) {
+        const inputs = ex.inputs || [];
+        const out = ex.output || {};
+        const outVals = Array.isArray(out.values) ? out.values : [out.values];
+
+        function laneBits(typeName) {
+            if (!typeName) return null;
+            let m = typeName.match(/^u?int(8|16|32|64)(?:x\d+)?_t$/);
+            if (m) return +m[1];
+            m = typeName.match(/^(?:float|bfloat|mfloat)(8|16|32|64)(?:x\d+)?_t$/);
+            if (m) return +m[1];
+            return null;
+        }
+        function hexFromValue(v, bits) {
+            if (bits == null) return '';
+            const len = bits / 4;
+            if (bits <= 32) {
+                const mask = bits === 32 ? 0xffffffff : ((1 << bits) - 1);
+                const u = (Number(v) & mask) >>> 0;
+                return u.toString(16).padStart(len, '0');
+            }
+            let n = typeof v === 'bigint' ? v : BigInt(v);
+            if (n < 0n) n = (1n << 64n) + n;
+            return n.toString(16).padStart(len, '0');
+        }
+        function hexFromBytes(bytesHex, laneIdx, bits) {
+            const lb = bits / 8;
+            const slice = bytesHex.slice(laneIdx * lb * 2, (laneIdx + 1) * lb * 2);
+            return slice.match(/.{1,2}/g).reverse().join('');
+        }
+
+        const rows = [];
+        for (const inp of inputs) {
+            const bits = laneBits(inp.type);
+            const vals = Array.isArray(inp.values) ? inp.values : [inp.values];
+            rows.push({
+                label: (inp.name || '') + ':',
+                values: vals,
+                hexes: vals.map(v => hexFromValue(v, bits)),
+                cls: '',
+            });
+        }
+        {
+            const bits = laneBits(out.type);
+            const hexes = outVals.map((v, i) =>
+                out.bytes_hex && bits ? hexFromBytes(out.bytes_hex, i, bits) : hexFromValue(v, bits)
+            );
+            rows.push({ label: '→', values: outVals, hexes, cls: 'ex-out', isOut: true });
+        }
+
+        const lanes = Math.max(1, ...rows.map(r => r.values.length));
+        const cells = [];
+        for (const row of rows) {
+            const labelClass = row.isOut ? 'ex-lbl ex-arrow' : 'ex-lbl';
+            cells.push(`<span class="${labelClass}">${escapeHtml(row.label)}</span>`);
+            for (let i = 0; i < lanes; i++) {
+                if (i < row.values.length) {
+                    const dec = String(row.values[i]);
+                    const hex = row.hexes[i] || '';
+                    cells.push(
+                        `<span class="ex-val ${row.cls}">` +
+                        `<span class="ex-dec">${escapeHtml(dec)}</span>` +
+                        `<span class="ex-hexcell">${escapeHtml(hex)}</span>` +
+                        `</span>`
+                    );
+                } else {
+                    cells.push(`<span class="ex-val"></span>`);
+                }
+            }
+        }
+        const cols = `auto repeat(${lanes}, max-content)`;
+        const toggle =
+            `<div class="ex-modes" role="group" aria-label="number base">` +
+            `<button type="button" class="ex-mode is-active" data-mode="dec" aria-pressed="true">dec</button>` +
+            `<button type="button" class="ex-mode" data-mode="hex" aria-pressed="false">hex</button>` +
+            `</div>`;
+        return `<div class="ex" style="grid-template-columns:${cols}">${toggle}${cells.join('')}</div>`;
+    }
 })();

@@ -25,6 +25,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "data" / "intrinsics.jsonl"
+VERIFIER_CACHE_DIR = ROOT / "data" / "verifier-cache"
 DIST = ROOT / "simd-tooltip" / "dist"
 
 WEB_DESC_LIMIT = 220
@@ -228,6 +229,34 @@ def extract_types(records_path: Path) -> dict[str, dict]:
     return out
 
 
+def load_verifier_examples() -> dict[str, dict]:
+    """Read every shard under data/verifier-cache/*.jsonl and return
+    {intrinsic_name: shipped_example} -- one example per intrinsic.
+
+    Picks the first cache entry per name; we'll need a real selector when an
+    intrinsic ends up with multiple verified inputs_hash entries.
+    """
+    out: dict[str, dict] = {}
+    if not VERIFIER_CACHE_DIR.is_dir():
+        return out
+    for shard in sorted(VERIFIER_CACHE_DIR.glob("*.jsonl")):
+        with shard.open() as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                e = json.loads(line)
+                name = e["intrinsic"]
+                if name in out:
+                    continue
+                # Strip the cache-only metadata; keep what the UI renders.
+                out[name] = {
+                    "inputs": e["inputs"],
+                    "output": e["output"],
+                }
+    return out
+
+
 def doc_url(name: str, source: str, acle_name: str | None = None) -> str:
     if source == "arm-acle":
         # ARM's developer-portal URLs keep the bracket markers from the ACLE
@@ -243,6 +272,8 @@ def doc_url(name: str, source: str, acle_name: str | None = None) -> str:
 
 def main():
     DIST.mkdir(parents=True, exist_ok=True)
+
+    verifier_examples = load_verifier_examples()
 
     by_canonical: dict[str, dict] = {}
     alias_targets: dict[str, list[str]] = {}
@@ -272,6 +303,9 @@ def main():
                 "source": r["source"],
                 "doc_url": doc_url(name, r["source"], r.get("acle_name")),
             }
+            ex = verifier_examples.get(name)
+            if ex is not None:
+                by_canonical[name]["example"] = ex
             for a in r.get("aliases", []):
                 alias_targets.setdefault(a, []).append(name)
 
@@ -375,6 +409,7 @@ def main():
     by_source = Counter(r["source"] for r in by_canonical.values())
     print(f"  intrinsics by source: {dict(by_source)}")
     print(f"  variant clusters: {len(clusters):,} clusters cover {cluster_members_count:,} records")
+    print(f"  verifier examples: {len(verifier_examples):,} intrinsics carry a worked example")
 
 
 if __name__ == "__main__":

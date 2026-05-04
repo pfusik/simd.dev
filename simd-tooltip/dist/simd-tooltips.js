@@ -561,6 +561,23 @@
     // Tab toggles inside the tooltip: click any header to open its body
     // (closing the others). Click the active header again to close.
     tip.addEventListener('click', (ev) => {
+      // dec/hex switch on the example panel: any click flips, regardless
+      // of which label was hit. Doesn't reposition.
+      const modeBtn = ev.target.closest('button.simd-tt-ex-mode[data-mode]');
+      if (modeBtn && tip.contains(modeBtn)) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const ex = modeBtn.closest('.simd-tt-ex');
+        if (ex) {
+          const isHex = ex.classList.toggle('hex');
+          for (const b of ex.querySelectorAll('button.simd-tt-ex-mode')) {
+            const active = (b.dataset.mode === 'hex') === isHex;
+            b.classList.toggle('is-active', active);
+            b.setAttribute('aria-pressed', active ? 'true' : 'false');
+          }
+        }
+        return;
+      }
       const btn = ev.target.closest('button.simd-tt-tab[data-tab]');
       if (!btn || !tip.contains(btn)) return;
       ev.preventDefault();
@@ -815,6 +832,91 @@
     return `<div class="simd-tt-head"><code>${escapeHtml(name)}</code></div><div class="simd-tt-error">${escapeHtml(String(err && err.message || err || 'load failed'))}</div>`;
   }
 
+  // ex = { inputs: [{name, type, values}], output: {type, bytes_hex, values} }
+  // Render as a CSS grid so lane values line up vertically across rows.
+  // Each value cell carries both dec and hex spans; a dec/hex toggle in the
+  // top-right corner switches which one is visible (CSS-only).
+  function renderExample(ex) {
+    const inputs = ex.inputs || [];
+    const out = ex.output || {};
+    const outVals = Array.isArray(out.values) ? out.values : [out.values];
+
+    function laneBits(typeName) {
+      if (!typeName) return null;
+      let m = typeName.match(/^u?int(8|16|32|64)(?:x\d+)?_t$/);
+      if (m) return +m[1];
+      m = typeName.match(/^(?:float|bfloat|mfloat)(8|16|32|64)(?:x\d+)?_t$/);
+      if (m) return +m[1];
+      return null;
+    }
+    function hexFromValue(v, bits) {
+      if (bits == null) return '';
+      const len = bits / 4;
+      if (bits <= 32) {
+        const mask = bits === 32 ? 0xffffffff : ((1 << bits) - 1);
+        const u = (Number(v) & mask) >>> 0;
+        return u.toString(16).padStart(len, '0');
+      }
+      let n = typeof v === 'bigint' ? v : BigInt(v);
+      if (n < 0n) n = (1n << 64n) + n;
+      return n.toString(16).padStart(len, '0');
+    }
+    function hexFromBytes(bytesHex, laneIdx, bits) {
+      // bytes are little-endian; flip per-lane for display.
+      const lb = bits / 8;
+      const slice = bytesHex.slice(laneIdx * lb * 2, (laneIdx + 1) * lb * 2);
+      return slice.match(/.{1,2}/g).reverse().join('');
+    }
+
+    const rows = [];
+    for (const inp of inputs) {
+      const bits = laneBits(inp.type);
+      const vals = Array.isArray(inp.values) ? inp.values : [inp.values];
+      rows.push({
+        label: (inp.name || '') + ':',
+        values: vals,
+        hexes: vals.map(v => hexFromValue(v, bits)),
+        cls: '',
+      });
+    }
+    {
+      const bits = laneBits(out.type);
+      const hexes = outVals.map((v, i) =>
+        out.bytes_hex && bits ? hexFromBytes(out.bytes_hex, i, bits) : hexFromValue(v, bits)
+      );
+      rows.push({ label: '→', values: outVals, hexes, cls: 'simd-tt-ex-out', isOut: true });
+    }
+
+    const lanes = Math.max(1, ...rows.map(r => r.values.length));
+    const cells = [];
+    for (const row of rows) {
+      const labelClass = row.isOut
+        ? 'simd-tt-ex-lbl simd-tt-ex-arrow' : 'simd-tt-ex-lbl';
+      cells.push(`<span class="${labelClass}">${escapeHtml(row.label)}</span>`);
+      for (let i = 0; i < lanes; i++) {
+        if (i < row.values.length) {
+          const dec = String(row.values[i]);
+          const hex = row.hexes[i] || '';
+          cells.push(
+            `<span class="simd-tt-ex-val ${row.cls}">` +
+            `<span class="simd-tt-ex-dec">${escapeHtml(dec)}</span>` +
+            `<span class="simd-tt-ex-hexcell">${escapeHtml(hex)}</span>` +
+            `</span>`
+          );
+        } else {
+          cells.push(`<span class="simd-tt-ex-val"></span>`);
+        }
+      }
+    }
+    const cols = `auto repeat(${lanes}, max-content)`;
+    const toggle =
+      `<div class="simd-tt-ex-modes" role="group" aria-label="number base">` +
+      `<button type="button" class="simd-tt-ex-mode is-active" data-mode="dec" aria-pressed="true">dec</button>` +
+      `<button type="button" class="simd-tt-ex-mode" data-mode="hex" aria-pressed="false">hex</button>` +
+      `</div>`;
+    return `<div class="simd-tt-ex" style="grid-template-columns:${cols}">${toggle}${cells.join('')}</div>`;
+  }
+
   function renderTooltip(name, rec, ambig) {
     if (!rec && ambig) {
       const list = ambig.slice(0, 6).map(n => `<code>${escapeHtml(n)}</code>`).join(', ');
@@ -861,6 +963,13 @@
         id: 'pc',
         label: 'pseudocode',
         body: `<pre class="simd-tt-pc-body">${escapeHtml(rec.pseudocode)}</pre>`,
+      });
+    }
+    if (rec.example) {
+      tabs.push({
+        id: 'ex',
+        label: 'example',
+        body: renderExample(rec.example),
       });
     }
     let variantList = null;
@@ -1086,6 +1195,52 @@
       border-radius: 3px;
       font-size: 11px;
     }
+    .simd-tt-ex {
+      position: relative;
+      display: grid;
+      column-gap: 6px;
+      row-gap: 2px;
+      margin: 4px 0 0 0;
+      padding: 6px 38px 6px 8px;  /* room for the dec/hex toggle on the right */
+      background: #131722;
+      border-radius: 4px;
+      color: #cfd2dc;
+      font-size: 11.5px;
+      line-height: 1.5;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      overflow-x: auto;
+    }
+    .simd-tt-ex-lbl  { color: #5e6679; padding-right: 2px; }
+    .simd-tt-ex-arrow { color: #5e6679; }
+    .simd-tt-ex-val {
+      color: #cfd2dc;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+    .simd-tt-ex-out { color: #5ec083; }
+    .simd-tt-ex-hexcell { display: none; }
+    .simd-tt-ex.hex .simd-tt-ex-dec { display: none; }
+    .simd-tt-ex.hex .simd-tt-ex-hexcell { display: inline; }
+    .simd-tt-ex-modes {
+      position: absolute;
+      top: 4px;
+      right: 6px;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+    }
+    .simd-tt-ex-mode {
+      background: transparent;
+      border: 0;
+      color: #5e6679;
+      font: 10px ui-monospace, SFMono-Regular, Menlo, monospace;
+      line-height: 13px;
+      padding: 0 4px;
+      cursor: pointer;
+      text-align: center;
+    }
+    .simd-tt-ex-mode.is-active { color: #d8dde7; font-weight: 700; }
+    .simd-tt-ex-mode:focus-visible { outline: none; }
     /* Old standalone pseudocode rules superseded by .simd-tt-toggles above;
        leaving a small set for backcompat in case anything still uses them. */
     .simd-hint {

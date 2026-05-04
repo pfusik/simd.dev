@@ -1,0 +1,6 @@
+# Generated standalone-preview artifacts; regenerate with:
+#   python3 run_cluster.py --cluster <hash> --json-out preview-data.json
+#   python3 build_preview.py preview-data.json -o preview.html
+preview-data.json
+preview.html
+*.o
