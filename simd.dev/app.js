@@ -826,7 +826,12 @@
     // Build a small C++ source that exposes RESULT either as a folded
     // global (read out of .rodata by the asm parser) or by printing
     // its bytes from main() (CE's executor mode picks this up via stdout).
-    // Always includes main+printf so a single source works for both modes.
+    //
+    // We include `<cstdio>` + `main()` only when the target compiler
+    // ships a C++ stdlib *and* execution makes sense -- that is, on
+    // Intel via godbolt's cclang_trunk. The ARM cross-compiler on godbolt
+    // (armv8-full-cclang-trunk) has no stdlib, so we keep the harness
+    // header-free; the asm-parse path doesn't need printf.
     function buildFoldSource(rec, inputValues) {
         const cfg = window.SimdTooltips && window.SimdTooltips.ceConfigFor(rec);
         if (!cfg) throw new Error('no Compiler Explorer config for this intrinsic');
@@ -858,15 +863,19 @@
         const intelTypedefs = intel
             ? '\n#if !defined(_MSC_VER)\ntypedef long long __int64;\ntypedef int __int32;\ntypedef short __int16;\ntypedef signed char __int8;\n#endif\n'
             : '';
+        const stdioHeaders = intel ? '#include <cstdio>\n#include <cstddef>\n' : '';
+        const mainFn = intel
+            ? '\nint main() {\n' +
+              '    const unsigned char* p = reinterpret_cast<const unsigned char*>(&RESULT);\n' +
+              '    for (size_t i = 0; i < sizeof(RESULT); i++) std::printf("%02x", p[i]);\n' +
+              '    return 0;\n' +
+              '}\n'
+            : '';
         return (
-            includes + '\n#include <cstdio>\n#include <cstddef>\n' + intelTypedefs + '\n' +
+            includes + '\n' + stdioHeaders + intelTypedefs + '\n' +
             decls.join('\n') + '\n\n' +
             `extern "C" const ${retType} RESULT = ${rec.name}(${argList});\n` +
-            '\nint main() {\n' +
-            '    const unsigned char* p = reinterpret_cast<const unsigned char*>(&RESULT);\n' +
-            '    for (size_t i = 0; i < sizeof(RESULT); i++) std::printf("%02x", p[i]);\n' +
-            '    return 0;\n' +
-            '}\n'
+            mainFn
         );
     }
 
@@ -935,10 +944,13 @@
         const cfg = window.SimdTooltips.ceConfigFor(rec);
         if (!cfg) return null;
         const source = buildFoldSource(rec, inputValues);
-        // Keep language: 'c' (same as the existing "open in CE" link
-        // -- godbolt's compiler config supplies the right default
-        // --target for that). `-x c++` forces C++ semantics so dynamic
-        // initializers for global consts are accepted.
+        // Stay on `language: 'c'`: godbolt's compiler IDs are
+        // language-scoped, and our ARM/Intel compilers
+        // (armv8-full-cclang-trunk, cclang_trunk, ...) are catalogued
+        // under c. Setting c++ here makes godbolt drop our compiler and
+        // fall back to its default c++ one (which is delightful but not
+        // what we want). `-x c++` in the options keeps the compile in
+        // C++ mode, where dynamic-init globals are legal.
         const state = {
             sessions: [{
                 id: 1, language: 'c', source,
@@ -958,8 +970,17 @@
     // Mode is "fold" (read RESULT bytes out of .rodata in the asm) or
     // "execute" (CE's executor runs the binary; we parse stdout, which
     // is the hex-printed bytes from main()).
+    //
+    // Execute mode only applies when the target compiler on godbolt
+    // ships both libstdc++ *and* an executor backend -- currently
+    // Intel via cclang_trunk. ARM cross-compilers on godbolt have
+    // neither, so we always try fold mode for ARM and let CE's
+    // clang-trunk constant-fold what it can (which is more than our
+    // local macOS arm64 clang does, e.g. table lookups).
     async function ceCompileFold(rec, inputValues) {
-        const mode = rec.example.verified_via === 'execute' ? 'execute' : 'fold';
+        const intel = isIntelIntrinsic(rec.name);
+        const mode = (intel && rec.example.verified_via === 'execute')
+            ? 'execute' : 'fold';
         const cfg = window.SimdTooltips && window.SimdTooltips.ceConfigFor(rec);
         if (!cfg) throw new Error('no Compiler Explorer config');
         const source = buildFoldSource(rec, inputValues);
