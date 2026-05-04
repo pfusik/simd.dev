@@ -17,6 +17,7 @@ Pipeline per (intrinsic, [input_vectors]):
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import re
 import struct
@@ -25,6 +26,25 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+
+
+@functools.lru_cache(maxsize=1)
+def _rosetta_available() -> bool:
+    """True iff Apple's Rosetta 2 can run x86_64 binaries on this host.
+
+    We probe with `arch -x86_64 /usr/bin/true`. If exit 0, Rosetta is up
+    and we can use the Mach-O cross-compile + execute path for Intel
+    intrinsics. Otherwise we fall back to Linux/ELF freestanding cross-
+    compile, which only supports the fold path.
+    """
+    try:
+        proc = subprocess.run(
+            ["arch", "-x86_64", "/usr/bin/true"],
+            capture_output=True, timeout=2,
+        )
+        return proc.returncode == 0
+    except Exception:
+        return False
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = REPO_ROOT / "data" / "intrinsics.jsonl"
@@ -116,6 +136,217 @@ SCALAR_TYPES: dict[str, TypeInfo] = {
     "poly16_t": TypeInfo("poly", 16, 1),
     "poly64_t": TypeInfo("poly", 64, 1),
     "poly128_t": TypeInfo("poly", 128, 1),
+    # Plain C int (Intel uses these for extract / insert / status returns).
+    "int":      TypeInfo("int", 32, 1),
+    "unsigned": TypeInfo("uint", 32, 1),
+    "unsigned int": TypeInfo("uint", 32, 1),
+    "char":     TypeInfo("int",  8, 1),
+    "short":    TypeInfo("int", 16, 1),
+    "long":     TypeInfo("int", 64, 1),
+    "long long": TypeInfo("int", 64, 1),
+    "__int64":  TypeInfo("int", 64, 1),
+    "__int32":  TypeInfo("int", 32, 1),
+}
+
+
+# --------------------------------------------------------------------------
+# Intel (x86) SIMD support.
+#
+# Unlike ARM ACLE, Intel's `__m128i` / `__m128` / `__m128d` are lane-agnostic
+# C types. The lane shape of `__m128i` -- whether it's 16 int8s, 8 int16s,
+# etc. -- comes from the *intrinsic name* suffix (`_epi8`, `_epi16`, ...).
+# So we can't fill in TypeInfo from the type alone for `__m128i`; we need
+# the intrinsic name. The two helper layers below do that.
+# --------------------------------------------------------------------------
+
+# Type tables: known sizes for the C type itself. Lane shape comes from the
+# intrinsic name (see intel_lane_info_for).
+INTEL_VEC_BYTES: dict[str, int] = {
+    "__m64":       8,
+    "__m128":     16,
+    "__m128d":    16,
+    "__m128i":    16,
+    "__m128h":    16,
+    "__m128bh":   16,
+    "__m256":     32,
+    "__m256d":    32,
+    "__m256i":    32,
+    "__m256h":    32,
+    "__m256bh":   32,
+    "__m512":     64,
+    "__m512d":    64,
+    "__m512i":    64,
+    "__m512h":    64,
+    "__m512bh":   64,
+}
+
+
+def is_intel_intrinsic(name: str) -> bool:
+    return bool(re.match(r"^_(?:mm|tile)\w*$", name))
+
+
+# `_mm_<op>_<suffix>` -> lane info derived from the suffix.
+#  - epiNN / piNN  -> signed integer, NN-bit lanes
+#  - epuNN / puNN  -> unsigned integer, NN-bit lanes
+#  - siNN          -> "untyped" 128/256/512-bit -- treat as uint8 lanes
+#  - ps / ss       -> 32-bit float (vector / scalar)
+#  - pd / sd       -> 64-bit float
+#  - ph            -> 16-bit float (FP16)
+#  - pbh           -> bf16
+def intel_lane_info_for(
+    intrinsic_name: str, c_type: str, context: str = "output"
+) -> TypeInfo:
+    """Lane shape of `c_type` in the call to `intrinsic_name`.
+
+    `context` ∈ {"input", "output"}: for convert intrinsics like
+    `_mm_cvtepi8_epi64`, the source suffix governs input lanes, the
+    destination suffix governs output lanes. For ordinary intrinsics
+    with a single suffix, the choice doesn't matter.
+    """
+    bytes_total = INTEL_VEC_BYTES.get(c_type)
+    if bytes_total is None:
+        raise ValueError(f"unknown intel C type: {c_type}")
+
+    def _pick(pattern: str) -> "re.Match | None":
+        if context == "output":
+            ms = list(re.finditer(pattern, intrinsic_name))
+            return ms[-1] if ms else None
+        return re.search(pattern, intrinsic_name)
+
+    m = _pick(r"_e?p[iu](8|16|32|64)\b")
+    if m:
+        bits = int(m.group(1))
+        kind = "uint" if "u" in m.group(0) else "int"
+        return TypeInfo(kind, bits, bytes_total * 8 // bits)
+    m = _pick(r"_si(\d+)\b")
+    if m:
+        return TypeInfo("uint", 8, bytes_total)
+    if re.search(r"_(?:ps|ss)\b", intrinsic_name):
+        return TypeInfo("float", 32, bytes_total // 4)
+    if re.search(r"_(?:pd|sd)\b", intrinsic_name):
+        return TypeInfo("float", 64, bytes_total // 8)
+    if re.search(r"_(?:ph|sh)\b", intrinsic_name):
+        return TypeInfo("float", 16, bytes_total // 2)
+    if re.search(r"_pbh\b", intrinsic_name):
+        return TypeInfo("bfloat", 16, bytes_total // 2)
+    if c_type.endswith("bh"):
+        return TypeInfo("bfloat", 16, bytes_total // 2)
+    if c_type.endswith("h"):
+        return TypeInfo("float", 16, bytes_total // 2)
+    if c_type.endswith("d"):
+        return TypeInfo("float", 64, bytes_total // 8)
+    if c_type in ("__m128", "__m256", "__m512"):
+        return TypeInfo("float", 32, bytes_total // 4)
+    return TypeInfo("uint", 8, bytes_total)
+
+
+def intel_setr_call(values: list, info: TypeInfo) -> str:
+    """C source for `_mm{,256,512}_setr_<suffix>(values...)` matching the
+    lane shape of `info`. `_setr_*` puts values in *memory order* (low
+    addr -> first arg), which makes the harness much easier to read.
+
+    Special-case for 128-bit 64-lane: `_mm_setr_epi64x` does not exist
+    (only `_mm_set_epi64x` does), so we use `_set` with reversed args.
+    """
+    width = info.bits * info.count    # total bits, e.g. 128
+    prefix = {128: "_mm", 256: "_mm256", 512: "_mm512"}.get(width)
+    if prefix is None:
+        raise ValueError(f"can't pick set-builder for width {width}")
+    suffix_map = {
+        ("int", 8):  "epi8",
+        ("int", 16): "epi16",
+        ("int", 32): "epi32",
+        ("int", 64): "epi64x",
+        ("uint", 8):  "epi8",
+        ("uint", 16): "epi16",
+        ("uint", 32): "epi32",
+        ("uint", 64): "epi64x",
+        ("float", 16): "ph",
+        ("float", 32): "ps",
+        ("float", 64): "pd",
+        ("bfloat", 16): "pbh",
+    }
+    suffix = suffix_map.get((info.kind, info.bits))
+    if suffix is None:
+        raise ValueError(f"no setr builder for {info.kind}{info.bits}")
+    # 128-bit + 64-bit lanes: no _mm_setr_epi64x. Use _set with reversed args.
+    if width == 128 and info.bits == 64:
+        rev = list(reversed(values))
+        args = ", ".join(_intel_lane_literal(v, info) for v in rev)
+        return f"{prefix}_set_{suffix}({args})"
+    args = ", ".join(_intel_lane_literal(v, info) for v in values)
+    return f"{prefix}_setr_{suffix}({args})"
+
+
+def _intel_lane_literal(v, info: TypeInfo) -> str:
+    if info.kind in ("int", "uint", "poly"):
+        # Suffix the constant for 64-bit lanes so the compiler doesn't
+        # complain about the literal type.
+        if info.bits == 64:
+            return f"{v}LL" if info.kind == "int" else f"{v}ULL"
+        return str(v)
+    if info.kind == "float":
+        f = float(v)
+        if info.bits == 32:
+            return f"{f!r}f"
+        if info.bits == 16:
+            return f"((__fp16){f!r}f)"
+        return repr(f)
+    if info.kind == "bfloat":
+        return f"((__bf16){float(v)!r}f)"
+    return str(v)
+
+
+def intel_compile_flags(family_list: list[str]) -> list[str]:
+    """Cross-compile flags for an x86 SIMD family.
+
+    Two modes:
+    - With Rosetta: target `x86_64-apple-macos` so the linked binary
+      runs natively under Rosetta 2 -- unlocks the execute fallback for
+      intrinsics clang doesn't IR-fold (saturating, table lookups, ...).
+      The Apple SDK is available on disk so <cstdio> etc. work.
+    - Without Rosetta: target `x86_64-linux-gnu -ffreestanding` so we
+      can read .rodata bytes from the .o without needing a Linux sysroot.
+      Fold-only.
+    """
+    if _rosetta_available():
+        flags = ["-target", "x86_64-apple-macos"]
+    else:
+        flags = ["-target", "x86_64-linux-gnu", "-ffreestanding"]
+    seen = set()
+    for f in family_list:
+        for out in INTEL_FAMILY_FLAGS.get(f, []):
+            if out not in seen:
+                seen.add(out)
+                flags.append(out)
+    if not seen:
+        flags.append("-mavx2")
+    return flags
+
+
+# Map of Intel family-name -> march flags. Subsumes most of CE_INTEL_FLAGS
+# from simd-tooltips.js. Add more as we extend coverage.
+INTEL_FAMILY_FLAGS: dict[str, list[str]] = {
+    "MMX":       ["-mmmx"],
+    "SSE":       ["-msse"],
+    "SSE2":      ["-msse2"],
+    "SSE3":      ["-msse3"],
+    "SSSE3":     ["-mssse3"],
+    "SSE4.1":    ["-msse4.1"],
+    "SSE4.2":    ["-msse4.2"],
+    "AVX":       ["-mavx"],
+    "AVX2":      ["-mavx2"],
+    "AVX-512":   ["-mavx512f"],
+    "AVX-512/F": ["-mavx512f"],
+    "AVX-512/CD": ["-mavx512f", "-mavx512cd"],
+    "AVX-512/BW": ["-mavx512f", "-mavx512bw"],
+    "AVX-512/DQ": ["-mavx512f", "-mavx512dq"],
+    "AVX-512/VL": ["-mavx512f", "-mavx512vl"],
+    "FMA":       ["-mfma"],
+    "BMI1":      ["-mbmi"],
+    "BMI2":      ["-mbmi2"],
+    "AES":       ["-maes"],
+    "PCLMULQDQ": ["-mpclmul"],
 }
 
 
@@ -187,6 +418,10 @@ def effective_return(sig: "Signature") -> tuple[TypeInfo, str]:
     Returns (TypeInfo describing the buffer shape, C++ type string).
     """
     if sig.return_type != "void":
+        # Intel `__m128i` / `__m256i` / `__m512i` are lane-agnostic at the
+        # C-type level; the lane shape comes from the intrinsic name.
+        if is_intel_intrinsic(sig.name) and sig.return_type in INTEL_VEC_BYTES:
+            return intel_lane_info_for(sig.name, sig.return_type), sig.return_type
         ti = type_info(sig.return_type)
         if ti is None:
             raise ValueError(f"unsupported return type: {sig.return_type}")
@@ -288,6 +523,9 @@ def build_inputs(sig: "Signature") -> list[list]:
     in `sig`. Centralizes the per-type, per-name, per-pointer logic so
     every caller gets the same canonical inputs.
     """
+    if is_intel_intrinsic(sig.name):
+        return _build_inputs_intel(sig)
+
     out: list[list] = []
     # How many elements the pointer-loaded buffer should hold:
     #   vld1   -> total lanes of the (sub-)vector return
@@ -342,6 +580,41 @@ def build_inputs(sig: "Signature") -> list[list]:
             raise ValueError(f"unsupported type: {p.type_name}")
         out.append(_values_for(ti, role, ti.total_lanes))
 
+    return out
+
+
+_INTEL_IMM_TYPES = {
+    "const int", "const unsigned int",
+    "int", "unsigned int", "unsigned",
+    # Intel's guide also writes immediates as `__int32 imm8` etc.
+    "__int32", "__int8",
+}
+
+
+def _build_inputs_intel(sig: "Signature") -> list[list]:
+    """Intel variant of build_inputs. `__m128i` etc. need the intrinsic
+    name to know lane shape; pointers and immediates have the same
+    handling as ARM."""
+    out: list[list] = []
+    for i, p in enumerate(sig.params):
+        role = "a" if i == 0 else "b"
+        # In the Intel intrinsic guide, ANY non-vector int param is an
+        # immediate (mask, lane index, rounding mode, ...). 0 is a safe
+        # default for all of them.
+        if p.type_name in _INTEL_IMM_TYPES:
+            out.append([0])
+            continue
+        # Skip pointers / non-vector tricky params for v0.
+        if "*" in p.type_name:
+            raise ValueError(f"intel pointer param not supported yet: {p.type_name}")
+        if p.type_name in INTEL_VEC_BYTES:
+            ti = intel_lane_info_for(sig.name, p.type_name, context="input")
+            out.append(_values_for(ti, role, ti.count))
+            continue
+        ti = type_info(p.type_name)
+        if ti is None:
+            raise ValueError(f"unsupported intel param type: {p.type_name}")
+        out.append(_values_for(ti, role, ti.total_lanes))
     return out
 
 
@@ -435,8 +708,23 @@ def render_init_list(values: list, ti: TypeInfo) -> str:
     return "{ " + ", ".join(render_lane_literal(v, ti) for v in values) + " }"
 
 
+def compile_flags_for(sig: Signature, family_list: list[str] | None = None) -> list[str]:
+    """Extra clang flags needed to compile an intrinsic of this signature.
+
+    Returns [] for ARM intrinsics (we compile natively on aarch64). For
+    Intel intrinsics, returns -target + -m<feature> based on the family
+    list from the DB record (e.g. ['SSE4.1'] -> ['-target', ..., '-msse4.1']).
+    """
+    if not is_intel_intrinsic(sig.name):
+        return []
+    return intel_compile_flags(family_list or [])
+
+
 def emit_source(sig: Signature, inputs: list[list]) -> str:
     """Emit a tiny C++ source whose RESULT global is the folded intrinsic call."""
+    if is_intel_intrinsic(sig.name):
+        return _emit_source_intel(sig, inputs)
+
     # Pick the right includes for the families we support today (NEON +
     # the small ARM scalar bridges + ACLE crc32/aes/sha helpers).
     includes = (
@@ -550,8 +838,89 @@ int main() {{
 """
 
 
+def _emit_source_intel(sig: Signature, inputs: list[list]) -> str:
+    """Intel emit_source: includes <immintrin.h>, builds inputs via
+    `_mm{,256,512}_setr_<suffix>(...)` (no compound literals -- the
+    underlying vec_long layout is finicky and `_setr_*` is universally
+    supported), and lands RESULT in .rodata via constant-folding.
+    """
+    if len(inputs) != len(sig.params):
+        raise ValueError(
+            f"intrinsic {sig.name} expects {len(sig.params)} inputs, "
+            f"got {len(inputs)}"
+        )
+    eff_ti, ret_decl = effective_return(sig)
+
+    decls: list[str] = []
+    arg_names: list[str] = []
+    for i, (p, vals) in enumerate(zip(sig.params, inputs)):
+        if p.type_name in _INTEL_IMM_TYPES:
+            arg_names.append(str(vals[0]))
+            continue
+        if p.type_name in INTEL_VEC_BYTES:
+            ti = intel_lane_info_for(sig.name, p.type_name, context="input")
+            if len(vals) != ti.count:
+                raise ValueError(
+                    f"param {p.name}: expected {ti.count} lanes "
+                    f"({p.type_name} via {sig.name} suffix), got {len(vals)}"
+                )
+            decls.append(f"const {p.type_name} {p.name} = {intel_setr_call(vals, ti)};")
+            arg_names.append(p.name)
+            continue
+        # Scalars (int, float, etc.) - reuse the regular path.
+        ti = type_info(p.type_name)
+        if ti is None:
+            raise ValueError(f"unsupported intel param type: {p.type_name}")
+        if len(vals) != 1:
+            raise ValueError(
+                f"param {p.name}: expected 1 scalar value, got {len(vals)}"
+            )
+        decls.append(f"const {p.type_name} {p.name} = {render_lane_literal(vals[0], ti)};")
+        arg_names.append(p.name)
+
+    call_args = ", ".join(arg_names)
+    body = "\n    ".join(decls + [f"return {sig.name}({call_args});"])
+
+    # When Rosetta is available we target x86_64-apple-macos and link
+    # against the Apple SDK -- so cstdio + main() work and we can fall
+    # back to the execute path for intrinsics clang's IR folder doesn't
+    # model. Otherwise we're freestanding (fold-only).
+    has_main = _rosetta_available()
+    main_block = (
+        "#include <cstdio>\n#include <cstddef>\n"
+        if has_main else ""
+    ) + ""
+    main_fn = """
+int main() {
+    const unsigned char* p = reinterpret_cast<const unsigned char*>(&RESULT);
+    for (size_t i = 0; i < sizeof(RESULT); i++) std::printf("%02x", p[i]);
+    return 0;
+}
+""" if has_main else ""
+
+    return f"""#include <immintrin.h>
+{main_block}
+// Intel's intrinsic guide uses MSVC-style fixed-width typedefs.
+// clang in -target x86_64-linux-gnu doesn't ship them; supply our own.
+#if !defined(_MSC_VER)
+typedef long long  __int64;
+typedef int        __int32;
+typedef short      __int16;
+typedef signed char __int8;
+#endif
+
+extern "C" const {ret_decl} RESULT = []() -> {ret_decl} {{
+    {body}
+}}();
+{main_fn}"""
+
+
 def compile_and_extract(
-    source: str, *, target_triple: str | None = None, expected_bytes: int | None = None
+    source: str,
+    *,
+    target_triple: str | None = None,
+    extra_flags: list[str] | None = None,
+    expected_bytes: int | None = None,
 ) -> tuple[bytes, str]:
     """Compile source and return (RESULT bytes, method).
 
@@ -579,6 +948,8 @@ def compile_and_extract(
         cmd = ["clang++", "-O2", "-c", str(src), "-o", str(obj)]
         if target_triple:
             cmd[1:1] = ["-target", target_triple]
+        if extra_flags:
+            cmd[1:1] = list(extra_flags)
         proc = subprocess.run(cmd, capture_output=True, text=True)
         if proc.returncode != 0:
             raise RuntimeError(
@@ -610,18 +981,34 @@ def compile_and_extract(
         # intrinsics clang's IR constant folder doesn't model (saturating,
         # halving, table-lookup, etc.) but where the backend can lower the
         # call cleanly at -O2.
-        if target_triple:
+        target = target_triple
+        if not target and extra_flags:
+            for i, f in enumerate(extra_flags):
+                if f == "-target" and i + 1 < len(extra_flags):
+                    target = extra_flags[i + 1]
+                    break
+        # Native or Apple Mach-O on Apple Silicon (Rosetta) -- can run.
+        # Linux ELF cross-compile -- can't run, no emulator.
+        can_run = (
+            not target
+            or target.startswith("x86_64-apple")
+            and _rosetta_available()
+        )
+        if not can_run:
             raise RuntimeError(
                 "Constant-fold path failed and execute fallback is "
                 "disabled when cross-compiling (would need an emulator)."
             )
-        proc = subprocess.run(
-            ["clang++", "-O2", str(src), "-o", str(exe)],
-            capture_output=True, text=True,
-        )
+        link_cmd = ["clang++", "-O2", str(src), "-o", str(exe)]
+        if target_triple:
+            link_cmd[1:1] = ["-target", target_triple]
+        if extra_flags:
+            link_cmd[1:1] = list(extra_flags)
+        proc = subprocess.run(link_cmd, capture_output=True, text=True)
         if proc.returncode != 0:
             raise RuntimeError(
                 "link failed:\n"
+                f"  cmd: {' '.join(link_cmd)}\n"
                 f"  stderr:\n{proc.stderr}\n"
                 f"  source:\n{source}"
             )
@@ -658,8 +1045,9 @@ class _Symbol:
 
 
 _SYMTAB_RE = re.compile(
-    # vma flags  section          name
-    r"^([0-9a-f]+)\s+\S+\s+\S+\s+([\w,.]+)\s+(\S+)\s*$",
+    # ELF rows include a size column between section and name; Mach-O
+    # doesn't. Match either with an optional `<hex>` token before the name.
+    r"^([0-9a-f]+)\s+\S+\s+\S+\s+([\w,.]+)(?:\s+[0-9a-f]+)?\s+(\S+)\s*$",
     re.IGNORECASE,
 )
 

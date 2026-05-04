@@ -83,3 +83,13 @@ Related projects:
   has function-level / kernel-level docs but doesn't link individual
   NEON/SVE intrinsics — different abstraction layer, complementary rather
   than overlapping.
+
+## Acknowledgements
+
+Big thanks to [Matt Godbolt](https://xania.org/) for graciously agreeing
+to let simd.dev use [Compiler Explorer](https://godbolt.org/) as the live
+backend for editable worked-example recompilation. The "↻ run on CE"
+button on every per-intrinsic page POSTs a tiny harness to godbolt.org
+and round-trips the verified bytes back into the page; without
+Compiler Explorer's open API and Matt's blessing, the live edit
+experience wouldn't exist.

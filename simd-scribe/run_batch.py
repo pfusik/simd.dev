@@ -23,6 +23,7 @@ from scribe import (  # noqa: E402
     DB_PATH,
     build_inputs,
     compile_and_extract,
+    compile_flags_for,
     decode_lanes,
     effective_return,
     emit_source,
@@ -46,8 +47,11 @@ def _verify_one(r: dict) -> dict:
         inputs = build_inputs(sig)
         source = emit_source(sig, inputs)
         ret_ti, ret_decl = effective_return(sig)
+        flags = compile_flags_for(sig, r.get("family", []))
         out_bytes, method = compile_and_extract(
-            source, expected_bytes=ret_ti.total_bytes
+            source,
+            extra_flags=flags,
+            expected_bytes=ret_ti.total_bytes,
         )
         out_lanes = decode_lanes(ret_ti, out_bytes)
     except Exception as e:

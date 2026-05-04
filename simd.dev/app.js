@@ -68,6 +68,22 @@
         // Card click delegate: tab headers (open one body, close others),
         // variant chips (load that sibling's card), and family/arch tag
         // chips (toggle the corresponding filter).
+        // Select the entire value when an editable cell gets focus
+        // (click or tab) so the user can immediately overwrite. Defer
+        // with rAF so we run *after* the browser places the caret.
+        $card.addEventListener('focusin', (ev) => {
+            const cell = ev.target.closest('.ex-dec[contenteditable]');
+            if (!cell) return;
+            requestAnimationFrame(() => {
+                if (document.activeElement !== cell) return;
+                const range = document.createRange();
+                range.selectNodeContents(cell);
+                const sel = window.getSelection();
+                sel.removeAllRanges();
+                sel.addRange(range);
+            });
+        });
+
         // When a user edits an input cell, mark the output as stale
         // (grayed out) until a fresh "run on CE" finishes.
         $card.addEventListener('input', (ev) => {
@@ -450,7 +466,7 @@
         }
         if (rec.example) {
             sections.push({ id: 'ex', label: 'example',
-                body: renderExample(rec.example) });
+                body: renderExample(rec.example, name) });
         }
         if (rec.cluster && clusters && clusters[rec.cluster]) {
             const siblings = clusters[rec.cluster].filter(n => n !== name);
@@ -527,11 +543,13 @@
 
     function renderIntrinsicPageHTML(name, rec) {
         const back = `<nav class="page-nav"><a href="./" data-back="1">← back to search</a></nav>`;
-        _renderExampleLive = isLiveEligible(rec);
+        _renderExampleViewable = isLiveViewable(rec);
+        _renderExampleRunnable = isLiveRunnable(rec);
         try {
             return back + renderCardHTML(name, rec, { expanded: true });
         } finally {
-            _renderExampleLive = false;
+            _renderExampleViewable = false;
+            _renderExampleRunnable = false;
         }
     }
 
@@ -679,18 +697,29 @@
     // on the dedicated /?intrinsic page.
     // -------------------------------------------------------------------
 
-    // Eligible if scribe verified the result via the constant-fold path
-    // *and* all inputs are simple (no const-int, no pointers, no tuple
-    // params for v0). Output type may be any vector / scalar / tuple --
-    // we can decode whatever bytes come back.
-    function isLiveEligible(rec) {
+    // Two-level eligibility:
+    //
+    //   isLiveViewable -- can we generate a valid C++ harness so "see on
+    //                     CE" links work? Excludes pointer params (we
+    //                     don't synthesize input buffers yet).
+    //   isLiveRunnable -- can we round-trip via CE's compile API and
+    //                     parse RESULT bytes back? Requires the cached
+    //                     entry to have come from the fold path so we
+    //                     can read .rodata directly. (Execute-verified
+    //                     entries can still be opened in CE for
+    //                     inspection -- the user just won't get a live
+    //                     re-decoded output row.)
+    function isLiveViewable(rec) {
         if (!rec || !rec.example) return false;
-        if (rec.example.verified_via !== 'fold') return false;
         for (const inp of rec.example.inputs || []) {
-            if (/\*/.test(inp.type)) return false;        // pointer
-            if (/\bconst\b/.test(inp.type)) return false; // const int
+            if (/\*/.test(inp.type)) return false;
         }
         return true;
+    }
+    function isLiveRunnable(rec) {
+        if (!isLiveViewable(rec)) return false;
+        const v = rec.example.verified_via;
+        return v === 'fold' || v === 'execute';
     }
 
     function laneLiteral(v, info) {
@@ -701,6 +730,82 @@
         }
         if (info.kind === 'bfloat') return '((__bf16)' + Number(v) + 'f)';
         return String(v);
+    }
+
+    // ----- Intel x86 helpers (mirroring scribe.py's intel paths) ----------
+    const INTEL_VEC_BYTES = {
+        '__m64': 8,
+        '__m128': 16, '__m128d': 16, '__m128i': 16, '__m128h': 16, '__m128bh': 16,
+        '__m256': 32, '__m256d': 32, '__m256i': 32, '__m256h': 32, '__m256bh': 32,
+        '__m512': 64, '__m512d': 64, '__m512i': 64, '__m512h': 64, '__m512bh': 64,
+    };
+    const INTEL_IMM_TYPES = new Set([
+        'const int', 'const unsigned int',
+        'int', 'unsigned int', 'unsigned',
+        '__int32', '__int8',
+    ]);
+    function isIntelIntrinsic(name) {
+        return /^_(mm|tile)/.test(name || '');
+    }
+    function intelLaneInfoFor(intrinsicName, cType, context) {
+        const bytesTotal = INTEL_VEC_BYTES[cType];
+        if (bytesTotal == null) return null;
+        const epRe = /_e?p[iu](8|16|32|64)\b/g;
+        const matches = [];
+        let m;
+        while ((m = epRe.exec(intrinsicName))) matches.push(m);
+        if (matches.length) {
+            const pick = context === 'output' ? matches[matches.length - 1] : matches[0];
+            const bits = +pick[1];
+            const kind = /u/.test(pick[0]) ? 'uint' : 'int';
+            return { bits, kind, count: (bytesTotal * 8) / bits };
+        }
+        if (/_si\d+\b/.test(intrinsicName)) return { bits: 8, kind: 'uint', count: bytesTotal };
+        if (/_(?:ps|ss)\b/.test(intrinsicName)) return { bits: 32, kind: 'float', count: bytesTotal / 4 };
+        if (/_(?:pd|sd)\b/.test(intrinsicName)) return { bits: 64, kind: 'float', count: bytesTotal / 8 };
+        if (/_(?:ph|sh)\b/.test(intrinsicName)) return { bits: 16, kind: 'float', count: bytesTotal / 2 };
+        if (/_pbh\b/.test(intrinsicName)) return { bits: 16, kind: 'bfloat', count: bytesTotal / 2 };
+        if (/d$/.test(cType)) return { bits: 64, kind: 'float', count: bytesTotal / 8 };
+        if (/h$/.test(cType)) return { bits: 16, kind: 'float', count: bytesTotal / 2 };
+        if (/bh$/.test(cType)) return { bits: 16, kind: 'bfloat', count: bytesTotal / 2 };
+        if (cType === '__m128' || cType === '__m256' || cType === '__m512') {
+            return { bits: 32, kind: 'float', count: bytesTotal / 4 };
+        }
+        return { bits: 8, kind: 'uint', count: bytesTotal };
+    }
+    function intelLaneLiteral(v, info) {
+        if (info.kind === 'int' || info.kind === 'uint') {
+            return info.bits === 64 ? v + 'LL' : String(v);
+        }
+        if (info.kind === 'float') {
+            if (info.bits === 32) return Number(v) + 'f';
+            if (info.bits === 16) return '((__fp16)' + Number(v) + 'f)';
+            return String(Number(v));
+        }
+        if (info.kind === 'bfloat') return '((__bf16)' + Number(v) + 'f)';
+        return String(v);
+    }
+    function intelSetrCall(values, info) {
+        const width = info.bits * info.count;
+        const prefix = ({ 128: '_mm', 256: '_mm256', 512: '_mm512' })[width];
+        const suffixMap = {
+            'int|8':  'epi8',  'int|16':  'epi16',  'int|32':  'epi32',  'int|64':  'epi64x',
+            'uint|8': 'epi8',  'uint|16': 'epi16',  'uint|32': 'epi32',  'uint|64': 'epi64x',
+            'float|16': 'ph',  'float|32': 'ps',    'float|64': 'pd',
+            'bfloat|16': 'pbh',
+        };
+        const suffix = suffixMap[info.kind + '|' + info.bits];
+        if (!prefix || !suffix) {
+            throw new Error('no setr builder for ' + info.kind + info.bits + ' x ' + width);
+        }
+        if (width === 128 && info.bits === 64) {
+            // No _mm_setr_epi64x; use _set with reversed args.
+            const rev = values.slice().reverse();
+            return prefix + '_set_' + suffix + '(' +
+                rev.map(v => intelLaneLiteral(v, info)).join(', ') + ')';
+        }
+        return prefix + '_setr_' + suffix + '(' +
+            values.map(v => intelLaneLiteral(v, info)).join(', ') + ')';
     }
 
     function initList(values, typeName) {
@@ -718,29 +823,50 @@
         return '{' + values.map(v => laneLiteral(v, info)).join(',') + '}';
     }
 
-    // Build a small C++ source that compiles to a constant-folded RESULT
-    // global. Same shape scribe.py emits: each input gets its own named
-    // const so the harness reads as a normal program rather than a wall
-    // of inline literals.
+    // Build a small C++ source that exposes RESULT either as a folded
+    // global (read out of .rodata by the asm parser) or by printing
+    // its bytes from main() (CE's executor mode picks this up via stdout).
+    // Always includes main+printf so a single source works for both modes.
     function buildFoldSource(rec, inputValues) {
         const cfg = window.SimdTooltips && window.SimdTooltips.ceConfigFor(rec);
         if (!cfg) throw new Error('no Compiler Explorer config for this intrinsic');
         const includes = cfg.headers.map(h => `#include <${h}>`).join('\n');
+        const intel = isIntelIntrinsic(rec.name);
 
         const inputs = rec.example.inputs;
-        const decls = inputs.map((inp, i) => {
+        const decls = [];
+        const argParts = [];
+        for (let i = 0; i < inputs.length; i++) {
+            const inp = inputs[i];
             const vals = inputValues[i];
-            return `const ${inp.type} ${inp.name} = ${initList(vals, inp.type)};`;
-        });
-        const argList = inputs.map(inp => inp.name).join(', ');
+            const isImm = (intel && INTEL_IMM_TYPES.has(inp.type))
+                || /^const\s+(?:unsigned\s+)?int$/.test(inp.type);
+            if (isImm) {
+                argParts.push(String(vals[0]));
+                continue;
+            }
+            if (intel && INTEL_VEC_BYTES[inp.type] != null) {
+                const info = intelLaneInfoFor(rec.name, inp.type, 'input');
+                decls.push(`const ${inp.type} ${inp.name} = ${intelSetrCall(vals, info)};`);
+            } else {
+                decls.push(`const ${inp.type} ${inp.name} = ${initList(vals, inp.type)};`);
+            }
+            argParts.push(inp.name);
+        }
+        const argList = argParts.join(', ');
         const retType = rec.example.output.type;
-        // C++ -- dynamic initialization at namespace scope is legal, and
-        // clang folds the call at -O2 so RESULT lands in __const /
-        // .rodata. `extern "C"` keeps the symbol unmangled.
+        const intelTypedefs = intel
+            ? '\n#if !defined(_MSC_VER)\ntypedef long long __int64;\ntypedef int __int32;\ntypedef short __int16;\ntypedef signed char __int8;\n#endif\n'
+            : '';
         return (
-            includes + '\n\n' +
+            includes + '\n#include <cstdio>\n#include <cstddef>\n' + intelTypedefs + '\n' +
             decls.join('\n') + '\n\n' +
-            `extern "C" const ${retType} RESULT = ${rec.name}(${argList});\n`
+            `extern "C" const ${retType} RESULT = ${rec.name}(${argList});\n` +
+            '\nint main() {\n' +
+            '    const unsigned char* p = reinterpret_cast<const unsigned char*>(&RESULT);\n' +
+            '    for (size_t i = 0; i < sizeof(RESULT); i++) std::printf("%02x", p[i]);\n' +
+            '    return 0;\n' +
+            '}\n'
         );
     }
 
@@ -829,7 +955,11 @@
         return 'https://godbolt.org/clientstate/' + ceBase64Url(JSON.stringify(state));
     }
 
+    // Mode is "fold" (read RESULT bytes out of .rodata in the asm) or
+    // "execute" (CE's executor runs the binary; we parse stdout, which
+    // is the hex-printed bytes from main()).
     async function ceCompileFold(rec, inputValues) {
+        const mode = rec.example.verified_via === 'execute' ? 'execute' : 'fold';
         const cfg = window.SimdTooltips && window.SimdTooltips.ceConfigFor(rec);
         if (!cfg) throw new Error('no Compiler Explorer config');
         const source = buildFoldSource(rec, inputValues);
@@ -841,24 +971,48 @@
                 body: JSON.stringify({
                     source,
                     options: {
-                        // `-x c++` forces C++ mode: dynamic initializers
-                        // for namespace-scope globals are legal there
-                        // (and clang folds the call at -O2).
                         userArguments: cfg.options + ' -x c++',
                         filters: {
                             binary: false, commentOnly: true, demangle: false,
-                            directives: false, execute: false, intel: false,
+                            directives: false,
+                            execute: mode === 'execute',
+                            intel: false,
                             labels: true, libraryCode: false, trim: false,
                         },
-                        compilerOptions: {},
+                        compilerOptions: { executorRequest: mode === 'execute' },
                         libraries: [],
                     },
-                    lang: 'c++',
+                    lang: 'c',
                 }),
             }
         );
         if (!resp.ok) throw new Error('CE returned HTTP ' + resp.status);
         const data = await resp.json();
+        if (mode === 'execute') {
+            // The executor wraps the build+run; status lives at the
+            // outer level (data.code) for build status and
+            // data.execResult.code for run status.
+            const exec = data.execResult || data;
+            if (exec.buildResult && exec.buildResult.code !== 0) {
+                const stderr = (exec.buildResult.stderr || []).map(l => l.text || l).join('\n');
+                throw new Error('clang error: ' + stderr.slice(0, 240));
+            }
+            if (exec.code !== 0) {
+                const stderr = (exec.stderr || []).map(l => l.text || l).join('\n');
+                throw new Error('run error (exit ' + exec.code + '): ' + (stderr || '').slice(0, 240));
+            }
+            const out = (exec.stdout || []).map(l => l.text || l).join('').trim();
+            if (!/^[0-9a-fA-F]+$/.test(out)) {
+                throw new Error('unexpected stdout: ' + out.slice(0, 120));
+            }
+            const expected = expectedOutputBytes(rec);
+            if (out.length < expected * 2) {
+                throw new Error('expected ' + expected + ' bytes, got ' + (out.length / 2));
+            }
+            const bytes = new Uint8Array(expected);
+            for (let i = 0; i < expected; i++) bytes[i] = parseInt(out.slice(i * 2, i * 2 + 2), 16);
+            return { bytes, source };
+        }
         if (data.code !== 0) {
             const stderr = (data.stderr || []).map(l => l.text || l).join('\n');
             throw new Error('clang error: ' + stderr.slice(0, 240));
@@ -876,13 +1030,21 @@
 
     function decodeOutput(rec, bytes) {
         const out = rec.example.output;
-        const { bits, kind } = laneInfo(out.type);
-        const tup = tupleCount(out.type);
-        const totalLanes = (bytes.length * 8) / bits;
+        let bits, kind, count;
+        // For Intel `__m128i` etc. the lane shape comes from the
+        // intrinsic name suffix, not the C type.
+        if (isIntelIntrinsic(rec.name) && INTEL_VEC_BYTES[out.type] != null) {
+            const info = intelLaneInfoFor(rec.name, out.type, 'output');
+            bits = info.bits; kind = info.kind; count = info.count;
+        } else {
+            ({ bits, kind } = laneInfo(out.type));
+            count = bits ? (bytes.length * 8) / bits : 0;
+        }
+        if (!bits) return [];
         const values = [];
-        for (let i = 0; i < totalLanes; i++) {
-            const start = i * (bits / 8);
-            const slice = bytes.slice(start, start + bits / 8);
+        const lb = bits / 8;
+        for (let i = 0; i < count; i++) {
+            const slice = bytes.slice(i * lb, (i + 1) * lb);
             values.push(decodeLaneBytes(slice, bits, kind));
         }
         return values;
@@ -984,11 +1146,13 @@
         // whole .ex-wrap (panel + buttons + status) so we don't leave
         // duplicate buttons behind.
         const wrap = exNode.closest('.ex-wrap');
-        _renderExampleLive = true;
+        _renderExampleViewable = isLiveViewable(rec);
+        _renderExampleRunnable = isLiveRunnable(rec);
         try {
-            (wrap || exNode).outerHTML = renderExample(newExample);
+            (wrap || exNode).outerHTML = renderExample(newExample, rec.name);
         } finally {
-            _renderExampleLive = false;
+            _renderExampleViewable = false;
+            _renderExampleRunnable = false;
         }
     }
 
@@ -1021,12 +1185,25 @@
         }
         return big.toString();  // string for safe display past Number precision
     }
-    // Set when caller is rendering the dedicated /?intrinsic page and the
-    // record is live-editable. Switches the example body to editable
-    // inputs + a "run on CE" button.
-    let _renderExampleLive = false;
+    // Per-render flags set by the dedicated /?intrinsic page. Both default
+    // to false in compact-card / tooltip rendering.
+    //   _renderExampleViewable -- inputs are editable + "see on CE" button
+    //   _renderExampleRunnable -- additionally show "run on CE" button
+    let _renderExampleViewable = false;
+    let _renderExampleRunnable = false;
 
-    function renderExample(ex) {
+    // Lane info that's Intel-aware: for `__m128i` etc., the lane shape
+    // comes from the intrinsic-name suffix, not the C type.
+    function laneInfoFor(typeName, intrinsicName, context) {
+        if (intrinsicName && isIntelIntrinsic(intrinsicName)
+            && INTEL_VEC_BYTES[typeName] != null) {
+            const info = intelLaneInfoFor(intrinsicName, typeName, context);
+            return { bits: info.bits, kind: info.kind };
+        }
+        return laneInfo(typeName);
+    }
+
+    function renderExample(ex, intrinsicName) {
         const inputs = ex.inputs || [];
         const out = ex.output || {};
         const outVals = Array.isArray(out.values) ? out.values : [out.values];
@@ -1077,7 +1254,7 @@
         const rows = [];
         for (let ri = 0; ri < inputs.length; ri++) {
             const inp = inputs[ri];
-            const { bits, kind } = laneInfo(inp.type);
+            const { bits, kind } = laneInfoFor(inp.type, intrinsicName, 'input');
             const vals = Array.isArray(inp.values) ? inp.values : [inp.values];
             // Pointer params (loads) show what the intrinsic *reads from*
             // memory, not the pointer itself -- use *name to make that
@@ -1094,7 +1271,7 @@
             });
         }
         {
-            const { bits, kind } = laneInfo(out.type);
+            const { bits, kind } = laneInfoFor(out.type, intrinsicName, 'output');
             const hexes = outVals.map((v, i) =>
                 out.bytes_hex && bits ? hexFromBytes(out.bytes_hex, i, bits) : hexFromValue(v, bits, kind)
             );
@@ -1123,10 +1300,10 @@
                     const dec = String(row.values[i]);
                     const hex = row.hexes[i] || '';
                     // Inputs become contenteditable on the live-edit page.
-                    const editable = _renderExampleLive && !row.isOut
+                    const editable = _renderExampleViewable && !row.isOut
                         ? ` contenteditable="true" spellcheck="false"`
                         : '';
-                    const dataAttrs = _renderExampleLive && !row.isOut
+                    const dataAttrs = _renderExampleViewable && !row.isOut
                         ? ` data-row="${row.rowIdx}" data-lane="${i}"`
                         : '';
                     cells.push(
@@ -1146,15 +1323,19 @@
             `<button type="button" class="ex-mode is-active" data-mode="dec" aria-pressed="true">dec</button>` +
             `<button type="button" class="ex-mode" data-mode="hex" aria-pressed="false">hex</button>` +
             `</div>`;
-        const runBtn = _renderExampleLive
+        const runBtn = _renderExampleRunnable
             ? `<button type="button" class="ex-run" title="Re-compile on Compiler Explorer">↻ run on CE</button>`
-            + `<button type="button" class="ex-see" title="Open the harness in Compiler Explorer">↗ see on CE</button>`
             : '';
-        const status = _renderExampleLive
+        const seeBtn = _renderExampleViewable
+            ? `<button type="button" class="ex-see" title="Open the harness in Compiler Explorer">↗ see on CE</button>`
+            : '';
+        const status = _renderExampleViewable
             ? `<div class="ex-status" role="status"></div>`
             : '';
-        const hint = _renderExampleLive
-            ? `<div class="ex-hint"><em>input values are editable</em> — change a number, then click <strong>↻ run on CE</strong> to recompile and refresh the result.</div>`
+        const hint = _renderExampleViewable
+            ? (_renderExampleRunnable
+                ? `<div class="ex-hint"><em>input values are editable</em> — change a number and click <strong>↻ run on CE</strong> to recompile (or <strong>↗ see on CE</strong> to inspect the harness).</div>`
+                : `<div class="ex-hint"><em>input values are editable</em> — click <strong>↗ see on CE</strong> to inspect / recompile the harness.</div>`)
             : '';
         // Wrap so updateOutputRow can replace the entire example block
         // (hint + panel + buttons + status) atomically without leaving
@@ -1162,7 +1343,7 @@
         return (
             `<div class="ex-wrap">` + hint +
             `<div class="ex" style="grid-template-columns:${cols}">${toggle}${cells.join('')}</div>` +
-            runBtn + status +
+            runBtn + seeBtn + status +
             `</div>`
         );
     }
