@@ -63,7 +63,9 @@
     <article class="about-card">
       <h3><a href="https://github.com/MarcinZukowski/simd.dev/tree/main/data">data</a></h3>
       <p><strong>21,484 records</strong> spanning ARM (NEON / Helium / SVE / SVE2 / SME) and Intel (MMX / SSE* / AVX / AVX2 / AVX-512 / AMX) — plus <strong>208 SIMD types</strong>. Each entry has signature, ISA family, arch, short prose description, and (where upstream provides it) pseudocode.</p>
+      <p>Thousands of entries also carry a <strong>worked example with editable inputs</strong>: deterministic input vectors, the verified output, and a "↻ run on CE" button that recompiles your edits live on Compiler Explorer.</p>
       <p class="meta">Generated automatically from upstream sources (ARM ACLE, Intel Intrinsics Guide XML, LLVM clang headers). Pure stdlib Python, no LLM in the loop.</p>
+      <p class="meta">Examples (click): <a href="?intrinsic=vaddq_s8"><code>vaddq_s8</code></a> · <a href="?intrinsic=_mm_min_epi32"><code>_mm_min_epi32</code></a> · <a href="?intrinsic=vqtbl1q_u8"><code>vqtbl1q_u8</code></a></p>
     </article>
 
     <article class="about-card">

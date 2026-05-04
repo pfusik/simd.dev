@@ -17,6 +17,12 @@ records** spanning ARM (NEON / Helium / SVE / SVE2 / SME) and Intel
 for schema, provenance, and rebuild instructions.
 **Generated automatically from upstream sources** (ARM ACLE, Intel Intrinsics Guide XML,
 LLVM clang headers); pure stdlib Python, no LLM in the loop.
+Thousands of entries also carry a **worked example with editable inputs** —
+deterministic input vectors, the verified output bytes, and a *↻ run on CE*
+button that recompiles your edits live on Compiler Explorer. Try
+[`vaddq_s8`](https://simd.dev/?intrinsic=vaddq_s8),
+[`_mm_min_epi32`](https://simd.dev/?intrinsic=_mm_min_epi32),
+[`vqtbl1q_u8`](https://simd.dev/?intrinsic=vqtbl1q_u8).
 
 - **[simd-tooltip](simd-tooltip/)** - Drop-in JS tooltip library.
 One `<script>` tag adds
