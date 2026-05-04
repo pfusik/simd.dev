@@ -37,6 +37,7 @@
     let records  = null;       // {name: rec}
     let ambiguous = null;      // {alias: [canonical, ...]}
     let clusters = null;       // {cluster_id: [name, ...]} -- variant groups
+    const PAGE_TITLE = document.title;
 
     init().catch(err => {
         $status.textContent = 'failed to load database';
@@ -98,10 +99,67 @@
                 }
                 return;
             }
+            const more = ev.target.closest('button.variants-more');
+            if (more) {
+                // Reveal the hidden tail of variants and drop the button.
+                const tail = more.previousElementSibling;
+                if (tail && tail.classList.contains('variants-tail')) tail.hidden = false;
+                more.remove();
+                return;
+            }
             const variant = ev.target.closest('button.variant[data-name]');
-            if (variant) { showCard(variant.dataset.name); return; }
+            if (variant) {
+                // On the dedicated page, navigate to that variant's page;
+                // on the compact card, just swap to the variant's card.
+                if (document.body.classList.contains('intrinsic-mode')) {
+                    const target = variant.dataset.name;
+                    history.pushState(null, '', '?intrinsic=' + encodeURIComponent(target));
+                    enterIntrinsicPage(target);
+                } else {
+                    showCard(variant.dataset.name);
+                }
+                return;
+            }
             const filterTag = ev.target.closest('button.tag-filter[data-field]');
-            if (filterTag) toggleFilter(filterTag.dataset.field, filterTag.dataset.value);
+            if (filterTag) {
+                if (document.body.classList.contains('intrinsic-mode')) {
+                    // On the dedicated page, a filter chip means "go to
+                    // search filtered by this". Drop the intrinsic param.
+                    history.pushState(null, '', './');
+                    exitIntrinsicPage({ updateHistory: false });
+                }
+                toggleFilter(filterTag.dataset.field, filterTag.dataset.value);
+            }
+            const back = ev.target.closest('a[data-back="1"]');
+            if (back) {
+                ev.preventDefault();
+                exitIntrinsicPage();
+                return;
+            }
+            // Compact-card name → dedicated page (in-place, no reload).
+            const nameLink = ev.target.closest('a.name-link');
+            if (nameLink) {
+                ev.preventDefault();
+                const u = new URL(nameLink.href, location.href);
+                const target = u.searchParams.get('intrinsic');
+                if (target) {
+                    history.pushState(null, '', '?intrinsic=' + encodeURIComponent(target));
+                    enterIntrinsicPage(target);
+                }
+                return;
+            }
+            // Ambiguous-alias variant link inside the dedicated page.
+            const ambigLink = ev.target.closest('a[href^="?intrinsic="]');
+            if (ambigLink) {
+                ev.preventDefault();
+                const u = new URL(ambigLink.href, location.href);
+                const target = u.searchParams.get('intrinsic');
+                if (target) {
+                    history.pushState(null, '', '?intrinsic=' + encodeURIComponent(target));
+                    enterIntrinsicPage(target);
+                }
+                return;
+            }
         });
 
         const $home = document.getElementById('home-link');
@@ -127,6 +185,15 @@
             });
         });
 
+        // ?intrinsic=NAME -- dedicated full-page view. Takes priority over
+        // the legacy #hash form. Reload-friendly, shareable.
+        const params = new URLSearchParams(location.search);
+        const intrinsicParam = params.get('intrinsic');
+        if (intrinsicParam) {
+            enterIntrinsicPage(intrinsicParam);
+            return;
+        }
+
         // If the URL has #intrinsic, jump to it.
         if (location.hash.length > 1) {
             const target = decodeURIComponent(location.hash.slice(1));
@@ -139,6 +206,17 @@
 
         $q.focus();
     }
+
+    // Browser back/forward: re-evaluate URL and toggle modes as needed.
+    window.addEventListener('popstate', () => {
+        const params = new URLSearchParams(location.search);
+        const target = params.get('intrinsic');
+        if (target) {
+            enterIntrinsicPage(target);
+        } else if (document.body.classList.contains('intrinsic-mode')) {
+            exitIntrinsicPage({ updateHistory: false });
+        }
+    });
 
     function onInput() {
         // Any keystroke in the search box should hide the currently-open card --
@@ -318,9 +396,14 @@
         $card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
 
-    function renderCardHTML(name, rec) {
-        // Tags: family + arch tags are clickable buttons that toggle the
-        // corresponding filter chip. The "type" badge stays static.
+    // opts:
+    //   expanded -- if true, render every section open and labeled
+    //               (no tab buttons); used by the dedicated /?intrinsic
+    //               page. If false (default), render the compact card
+    //               with the tabbed UI.
+    function renderCardHTML(name, rec, opts = {}) {
+        const expanded = !!opts.expanded;
+
         const tags = [];
         if (rec.kind === 'type') tags.push(`<span class="tag kind">type</span>`);
         for (const f of rec.family || []) {
@@ -331,34 +414,56 @@
             tags.push(`<button type="button" class="tag tag-filter arch" data-field="arch" data-value="${escapeAttr(a.toLowerCase())}" title="filter arch:${escapeAttr(a)}">${escapeHtml(a)}</button>`);
         }
 
-        // Tab row: pseudocode + variants share one row of header buttons,
-        // mutually exclusive content underneath. Click handler on the card.
-        const tabs = [];
+        // Sections: pseudocode + example + variants. In compact mode they
+        // share a tab row (mutually exclusive). In expanded mode each is
+        // a labeled, always-visible section.
+        const sections = [];
         if (rec.pseudocode) {
-            tabs.push({ id: 'pc', label: 'pseudocode',
+            sections.push({ id: 'pc', label: 'pseudocode',
                 body: `<pre class="card-pc-body">${escapeHtml(rec.pseudocode)}</pre>` });
         }
         if (rec.example) {
-            tabs.push({ id: 'ex', label: 'example',
+            sections.push({ id: 'ex', label: 'example',
                 body: renderExample(rec.example) });
         }
         if (rec.cluster && clusters && clusters[rec.cluster]) {
             const siblings = clusters[rec.cluster].filter(n => n !== name);
             if (siblings.length > 0) {
-                const chips = siblings.map(n => `<button type="button" class="variant" data-name="${escapeAttr(n)}">${escapeHtml(n)}</button>`).join('');
-                tabs.push({ id: 'vars', label: siblings.length + ' variants',
-                    body: `<div class="variants-list">${chips}</div>` });
+                const VAR_LIMIT = 50;
+                const head = siblings.slice(0, VAR_LIMIT);
+                const tail = siblings.slice(VAR_LIMIT);
+                const chip = n => `<button type="button" class="variant" data-name="${escapeAttr(n)}">${escapeHtml(n)}</button>`;
+                let html = head.map(chip).join('');
+                if (tail.length) {
+                    html += `<span class="variants-tail" hidden>${tail.map(chip).join('')}</span>`;
+                    html += `<button type="button" class="variants-more" data-more="1">+${tail.length} more</button>`;
+                }
+                sections.push({ id: 'vars', label: siblings.length + ' variants',
+                    body: `<div class="variants-list">${html}</div>` });
             }
         }
-        let togglesRow = '';
-        if (tabs.length) {
-            const headers = tabs.map(t =>
-                `<button type="button" class="card-tab" data-tab="${t.id}" aria-expanded="false">${t.label}</button>`
-            ).join('');
-            const bodies = tabs.map(t =>
-                `<div class="card-tab-body" data-body="${t.id}" hidden>${t.body}</div>`
-            ).join('');
-            togglesRow = `<div class="card-toggles">${headers}${bodies}</div>`;
+
+        let body = '';
+        if (sections.length) {
+            if (expanded) {
+                // Dedicated-page mode: each section is a <details open> so
+                // the user can collapse what they don't want without
+                // losing the others. All open by default.
+                body = sections.map(s =>
+                    `<details class="card-section" data-section="${s.id}" open>
+                        <summary class="card-section-title">${s.label}</summary>
+                        ${s.body}
+                    </details>`
+                ).join('');
+            } else {
+                const headers = sections.map(s =>
+                    `<button type="button" class="card-tab" data-tab="${s.id}" aria-expanded="false">${s.label}</button>`
+                ).join('');
+                const bodies = sections.map(s =>
+                    `<div class="card-tab-body" data-body="${s.id}" hidden>${s.body}</div>`
+                ).join('');
+                body = `<div class="card-toggles">${headers}${bodies}</div>`;
+            }
         }
 
         const linkLabel = rec.source === 'arm-acle' ? 'Arm developer docs →' : 'Intel Intrinsics Guide →';
@@ -371,17 +476,67 @@
         const link = links.length ? `<div class="upstream-links">${links.join(' &middot; ')}</div>` : '';
 
         const desc = rec.description ? `<div class="description">${escapeHtml(rec.description)}</div>` : '';
+        // Compact card: name links to the dedicated /?intrinsic page.
+        // Expanded page: name is plain text (we're already on its page).
+        const nameNode = expanded
+            ? `<span class="name">${escapeHtml(name)}</span>`
+            : `<a class="name name-link" href="?intrinsic=${encodeURIComponent(name)}">${escapeHtml(name)}</a>`;
+        // Top-right "open dedicated page" link on the compact card.
+        const openLink = expanded
+            ? ''
+            : `<a class="card-open name-link" href="?intrinsic=${encodeURIComponent(name)}" title="Open dedicated page">↗</a>`;
 
         return `
             <div class="card-head">
-                <span class="name">${escapeHtml(name)}</span>
+                ${nameNode}
                 ${tags.join(' ')}
+                ${openLink}
             </div>
             <pre class="signature">${escapeHtml(rec.definition || '')}</pre>
             ${desc}
-            ${togglesRow}
+            ${body}
             ${link}
         `;
+    }
+
+    function renderIntrinsicPageHTML(name, rec) {
+        const back = `<nav class="page-nav"><a href="./" data-back="1">← back to search</a></nav>`;
+        return back + renderCardHTML(name, rec, { expanded: true });
+    }
+
+    function enterIntrinsicPage(name) {
+        const rec = records[name];
+        const ambig = ambiguous[name];
+        document.body.classList.add('intrinsic-mode');
+        $card.classList.add('card-page');
+        $card.hidden = false;
+        if (!rec && ambig) {
+            const list = ambig.slice(0, 8).map(n => `<a href="?intrinsic=${encodeURIComponent(n)}"><code>${escapeHtml(n)}</code></a>`).join(', ');
+            const more = ambig.length > 8 ? ` <em>+${ambig.length - 8} more</em>` : '';
+            $card.innerHTML = `<nav class="page-nav"><a href="./" data-back="1">← back to search</a></nav>
+                <div class="card-head"><span class="name">${escapeHtml(name)}</span> <span class="tag">overloaded</span></div>
+                <div>Resolves to ${ambig.length} typed variants: ${list}${more}</div>`;
+        } else if (!rec) {
+            $card.innerHTML = `<nav class="page-nav"><a href="./" data-back="1">← back to search</a></nav>
+                <div class="muted"><code>${escapeHtml(name)}</code> not in database.</div>`;
+        } else {
+            $card.innerHTML = renderIntrinsicPageHTML(name, rec);
+            $card.classList.toggle('is-type', rec.kind === 'type');
+        }
+        document.title = name + ' · simd.dev';
+        window.scrollTo({ top: 0 });
+    }
+
+    function exitIntrinsicPage(opts = {}) {
+        document.body.classList.remove('intrinsic-mode');
+        $card.classList.remove('card-page');
+        $card.classList.remove('is-type');
+        $card.hidden = true;
+        $card.innerHTML = '';
+        document.title = PAGE_TITLE;
+        if (opts.updateHistory !== false) {
+            history.pushState(null, '', './');
+        }
     }
 
     // -------------------------------------------------------------------
@@ -473,13 +628,15 @@
         function laneInfo(typeName) {
             if (!typeName) return { bits: null, kind: null };
             if (/^const\s+(?:unsigned\s+)?int$/.test(typeName)) return { bits: 32, kind: 'int' };
-            let m = typeName.match(/^(u?)int(8|16|32|64|128)(?:x\d+)?_t$/);
+            // Allow zero or more `xN` segments so tuple types like
+            // int8x16x2_t / float32x4x3_t / poly16x4x4_t match too.
+            let m = typeName.match(/^(u?)int(8|16|32|64|128)(?:x\d+)*_t$/);
             if (m) return { bits: +m[2], kind: m[1] ? 'uint' : 'int' };
-            m = typeName.match(/^poly(8|16|32|64|128)(?:x\d+)?_t$/);
+            m = typeName.match(/^poly(8|16|32|64|128)(?:x\d+)*_t$/);
             if (m) return { bits: +m[1], kind: 'poly' };
-            m = typeName.match(/^bfloat(16)(?:x\d+)?_t$/);
+            m = typeName.match(/^bfloat(16)(?:x\d+)*_t$/);
             if (m) return { bits: 16, kind: 'bfloat' };
-            m = typeName.match(/^(?:m?float)(8|16|32|64)(?:x\d+)?_t$/);
+            m = typeName.match(/^(?:m?float)(8|16|32|64)(?:x\d+)*_t$/);
             if (m) return { bits: +m[1], kind: 'float' };
             return { bits: null, kind: null };
         }
@@ -526,15 +683,28 @@
             return slice.match(/.{1,2}/g).reverse().join('');
         }
 
+        // tupleCount: lanes per sub-vector for tuple types (int8x16x2_t -> 16);
+        // 0 means "not a tuple".
+        function tupleCount(typeName) {
+            const m = (typeName || '').match(/^[a-z]+\d+x(\d+)x[234]_t$/);
+            return m ? +m[1] : 0;
+        }
+
         const rows = [];
         for (const inp of inputs) {
             const { bits, kind } = laneInfo(inp.type);
             const vals = Array.isArray(inp.values) ? inp.values : [inp.values];
+            // Pointer params (loads) show what the intrinsic *reads from*
+            // memory, not the pointer itself -- use *name to make that
+            // clear.
+            const isPtr = /\*\s*$/.test(inp.type || '');
+            const labelName = (isPtr ? '*' : '') + (inp.name || '');
             rows.push({
-                label: (inp.name || '') + ':',
+                label: labelName + ':',
                 values: vals,
                 hexes: vals.map(v => hexFromValue(v, bits, kind)),
                 cls: '',
+                tupleCount: tupleCount(inp.type),
             });
         }
         {
@@ -542,8 +712,16 @@
             const hexes = outVals.map((v, i) =>
                 out.bytes_hex && bits ? hexFromBytes(out.bytes_hex, i, bits) : hexFromValue(v, bits, kind)
             );
-            rows.push({ label: '→', values: outVals, hexes, cls: 'ex-out', isOut: true });
+            rows.push({
+                label: '→', values: outVals, hexes,
+                cls: 'ex-out', isOut: true,
+                tupleCount: tupleCount(out.type),
+            });
         }
+
+        // Sub-vector boundaries are per-row: only register tuple rows
+        // (int8x16x2_t, etc.) get the thicker separator at lane k * count.
+        // Memory rows (pointer types) and plain vectors get no boundary.
 
         const lanes = Math.max(1, ...rows.map(r => r.values.length));
         const cells = [];
@@ -551,17 +729,21 @@
             const labelClass = row.isOut ? 'ex-lbl ex-arrow' : 'ex-lbl';
             cells.push(`<span class="${labelClass}">${escapeHtml(row.label)}</span>`);
             for (let i = 0; i < lanes; i++) {
+                const isBoundary = row.tupleCount > 0
+                    && i > 0 && (i % row.tupleCount) === 0;
+                const cls = ['ex-val', row.cls, isBoundary ? 'ex-boundary' : '']
+                    .filter(Boolean).join(' ');
                 if (i < row.values.length) {
                     const dec = String(row.values[i]);
                     const hex = row.hexes[i] || '';
                     cells.push(
-                        `<span class="ex-val ${row.cls}">` +
+                        `<span class="${cls}">` +
                         `<span class="ex-dec">${escapeHtml(dec)}</span>` +
                         `<span class="ex-hexcell">${escapeHtml(hex)}</span>` +
                         `</span>`
                     );
                 } else {
-                    cells.push(`<span class="ex-val"></span>`);
+                    cells.push(`<span class="${cls}"></span>`);
                 }
             }
         }

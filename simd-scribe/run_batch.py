@@ -12,8 +12,10 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import json
+import os
 import sys
 from collections import Counter
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -33,8 +35,60 @@ from run_cluster import (  # noqa: E402
 )
 
 
-def categorize_error(e: Exception) -> str:
-    msg = str(e).split("\n", 1)[0]
+def _verify_one(r: dict) -> dict:
+    """Worker entry point. Returns a dict with kind='ok' or kind='fail'.
+
+    Lives at module level so ProcessPoolExecutor can pickle it.
+    """
+    name = r["intrinsic"]
+    try:
+        sig = parse_signature(r["definition"])
+        inputs = build_inputs(sig)
+        source = emit_source(sig, inputs)
+        ret_ti, ret_decl = effective_return(sig)
+        out_bytes, method = compile_and_extract(
+            source, expected_bytes=ret_ti.total_bytes
+        )
+        out_lanes = decode_lanes(ret_ti, out_bytes)
+    except Exception as e:
+        return {
+            "kind": "fail",
+            "name": name,
+            "error_type": type(e).__name__,
+            "error_msg": str(e),
+        }
+
+    out_type_name = sig.return_type
+    if out_type_name == "void":
+        out_type_name = ret_decl
+    shipped_inputs = [
+        {"name": p.name, "type": p.type_name, "values": vals}
+        for p, vals in zip(sig.params, inputs) if vals
+    ]
+    return {
+        "kind": "ok",
+        "method": method,
+        "out_hex": out_bytes.hex(),
+        "record": {
+            "intrinsic": name,
+            "definition": r["definition"],
+            "family": r["family"],
+            "arch": r["arch"],
+            "description": r.get("description", ""),
+            "cluster_id": r.get("pseudocode_hash") or "",
+            "verified_via": method,
+            "inputs": shipped_inputs,
+            "output": {
+                "type": out_type_name,
+                "bytes_hex": out_bytes.hex(),
+                "values": out_lanes,
+            },
+        },
+    }
+
+
+def categorize_error(error_type: str, error_msg: str) -> str:
+    msg = error_msg.split("\n", 1)[0]
     # Collapse common families to keep the report readable.
     lower = msg.lower()
     if "unsupported param type" in lower or "unsupported return type" in lower:
@@ -52,7 +106,7 @@ def categorize_error(e: Exception) -> str:
         return "clang: " + (msg[len("clang failed:"):].strip()[:80] or "?")
     if "could not locate result bytes" in lower:
         return "fold: result not in __const (call did not fold)"
-    return f"other: {type(e).__name__}: {msg[:80]}"
+    return f"other: {error_type}: {msg[:80]}"
 
 
 def main() -> int:
@@ -69,6 +123,10 @@ def main() -> int:
                     help="print every failure (otherwise summary only)")
     ap.add_argument("--show-pass", action="store_true",
                     help="print every success (otherwise summary only)")
+    ap.add_argument("-j", "--jobs", type=int, default=os.cpu_count() or 4,
+                    help="parallel worker count (default: # of CPUs)")
+    ap.add_argument("--refresh", action="store_true",
+                    help="ignore the existing cache shard; recompute everything")
     args = ap.parse_args()
 
     fams = set(args.family) if args.family else None
@@ -87,62 +145,98 @@ def main() -> int:
     if args.limit:
         candidates = candidates[: args.limit]
 
-    print(f"Running scribe on {len(candidates):,} candidates")
+    # Load any existing cache so we can skip recomputing entries whose
+    # (intrinsic, inputs_hash, compiler_id) matches what we'd produce now.
+    existing_cache: dict[tuple[str, str], dict] = {}
+    cache_path = Path(args.cache_out) if args.cache_out else None
+    if cache_path and cache_path.exists() and not args.refresh:
+        with cache_path.open() as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                e = json.loads(line)
+                existing_cache[(e["intrinsic"], e["inputs_hash"])] = e
+    current_cid = compiler_id()
 
-    successes: list[dict] = []
+    successes: list[dict] = []  # in *output record* shape, ready for upsert_cache
     method_counter: Counter = Counter()
     fail_counter: Counter = Counter()
-    fail_examples: dict[str, str] = {}  # category -> example name
+    fail_examples: dict[str, str] = {}
 
+    # Partition candidates: cache hits skip the compile entirely, misses
+    # go to the worker pool.
+    misses: list[dict] = []
+    hits = 0
     for r in candidates:
-        name = r["intrinsic"]
+        if not existing_cache:
+            misses.append(r)
+            continue
+        # Build the same inputs we'd feed to the harness now and hash
+        # them. If a cached entry matches that hash *and* the compiler is
+        # unchanged, it stays valid.
         try:
             sig = parse_signature(r["definition"])
             inputs = build_inputs(sig)
-            source = emit_source(sig, inputs)
-            ret_ti, _ = effective_return(sig)
-            out_bytes, method = compile_and_extract(
-                source, expected_bytes=ret_ti.total_bytes
-            )
-            out_lanes = decode_lanes(ret_ti, out_bytes)
-        except Exception as e:
-            cat = categorize_error(e)
-            fail_counter[cat] += 1
-            fail_examples.setdefault(cat, name)
-            if args.show_fail:
-                print(f"  FAIL  {name:36s}  {cat}")
+            shipped_inputs = [
+                {"name": p.name, "type": p.type_name, "values": vals}
+                for p, vals in zip(sig.params, inputs) if vals
+            ]
+            ihash = inputs_hash(shipped_inputs)
+        except Exception:
+            misses.append(r)
             continue
+        cached = existing_cache.get((r["intrinsic"], ihash))
+        if cached and cached.get("compiler_id") == current_cid:
+            successes.append({
+                "intrinsic": r["intrinsic"],
+                "definition": r["definition"],
+                "family": r["family"],
+                "arch": r["arch"],
+                "description": r.get("description", ""),
+                "cluster_id": r.get("pseudocode_hash") or "",
+                "verified_via": cached.get("verified_via", ""),
+                "inputs": cached["inputs"],
+                "output": cached["output"],
+                # Keep the original verified_at so cache-hit reruns
+                # don't churn git diffs every time.
+                "verified_at": cached.get("verified_at"),
+            })
+            method_counter[cached.get("verified_via", "?")] += 1
+            hits += 1
+        else:
+            misses.append(r)
 
-        method_counter[method] += 1
-        # For stores (sig.return_type == "void"), report the synthesized
-        # buffer type that captures what the intrinsic actually wrote.
-        out_type_name = sig.return_type
-        if out_type_name == "void":
-            _, ret_decl = effective_return(sig)
-            out_type_name = ret_decl
-        # Strip store pointer params from inputs (they're output buffers,
-        # we don't generate values for them).
-        shipped_inputs = [
-            {"name": p.name, "type": p.type_name, "values": vals}
-            for p, vals in zip(sig.params, inputs) if vals
-        ]
-        successes.append({
-            "intrinsic": name,
-            "definition": r["definition"],
-            "family": r["family"],
-            "arch": r["arch"],
-            "description": r.get("description", ""),
-            "cluster_id": r.get("pseudocode_hash") or "",
-            "verified_via": method,
-            "inputs": shipped_inputs,
-            "output": {
-                "type": out_type_name,
-                "bytes_hex": out_bytes.hex(),
-                "values": out_lanes,
-            },
-        })
-        if args.show_pass:
-            print(f"  OK    {name:36s}  via {method:7s}  -> {out_bytes.hex()}")
+    print(f"Running scribe on {len(candidates):,} candidates "
+          f"(cache hits: {hits:,}, to compile: {len(misses):,}, "
+          f"parallel: {args.jobs} workers)")
+
+    done = 0
+    total = len(misses)
+    last_print = 0
+
+    if misses:
+        with ProcessPoolExecutor(max_workers=args.jobs) as pool:
+            futs = {pool.submit(_verify_one, r): r["intrinsic"] for r in misses}
+            for fut in as_completed(futs):
+                res = fut.result()
+                done += 1
+                if res["kind"] == "fail":
+                    cat = categorize_error(res["error_type"], res["error_msg"])
+                    fail_counter[cat] += 1
+                    fail_examples.setdefault(cat, res["name"])
+                    if args.show_fail:
+                        print(f"  FAIL  {res['name']:36s}  {cat}")
+                else:
+                    method_counter[res["method"]] += 1
+                    successes.append(res["record"])
+                    if args.show_pass:
+                        print(f"  OK    {res['record']['intrinsic']:36s}  "
+                              f"via {res['method']:7s}  -> {res['out_hex']}")
+                if done - last_print >= 200 or done == total:
+                    last_print = done
+                    print(f"  progress: {done:,}/{total:,} "
+                          f"({100.0 * done / max(total, 1):.0f}%)")
 
     n = len(candidates)
     n_ok = len(successes)
@@ -175,7 +269,7 @@ def main() -> int:
                 "verified_via": ex["verified_via"],
                 "inputs": ex["inputs"],
                 "output": ex["output"],
-                "verified_at": today,
+                "verified_at": ex.get("verified_at") or today,
             })
         added, updated = upsert_cache(Path(args.cache_out), cache_entries)
         print()

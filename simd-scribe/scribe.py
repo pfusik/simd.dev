@@ -315,14 +315,20 @@ def build_inputs(sig: "Signature") -> list[list]:
             continue
 
         # `<elem> const *` -- load. Allocate a buffer of `load_count`
-        # elements, sourced from the same per-bits pattern we use for
-        # vector params.
+        # elements. Use a strictly *sequential* 1..N integer (or float)
+        # pattern -- not the per-bits A/B pattern -- so vld2/vld3/vld4
+        # readers can see the deinterleave clearly (otherwise a 32-lane
+        # buffer would cycle 1..16,1..16 which looks like duplicated
+        # data, not interleaved pairs).
         elem = is_load_pointer(p.type_name)
         if elem is not None:
             elem_ti = type_info(elem)
             if elem_ti is None:
                 raise ValueError(f"unknown element type for pointer: {p.type_name}")
-            out.append(_values_for(elem_ti, role, load_count))
+            if elem_ti.kind in ("float", "bfloat"):
+                out.append([float(i) for i in range(1, load_count + 1)])
+            else:
+                out.append(list(range(1, load_count + 1)))
             continue
 
         # `<elem> *` -- store. The pointer points at the *output buffer*

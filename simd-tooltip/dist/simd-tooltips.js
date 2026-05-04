@@ -57,6 +57,7 @@
     wrapClass: 'simd-intrinsic',
     tooltipClass: 'simd-tooltip',
     moveThrottleMs: 30,  // throttle for lazy-mode mousemove handler
+    pageBase: 'https://simd.dev/',  // dedicated-intrinsic-page base URL
   };
 
   // ---------------------------------------------------------------------
@@ -578,6 +579,19 @@
         }
         return;
       }
+      // "+N more" expander on the variants list.
+      const moreBtn = ev.target.closest('button.simd-tt-vars-more');
+      if (moreBtn && tip.contains(moreBtn)) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const tail = moreBtn.previousElementSibling;
+        if (tail && tail.classList.contains('simd-tt-vars-tail')) tail.hidden = false;
+        moreBtn.remove();
+        if (activeTarget && activeTarget.getBoundingClientRect) {
+          positionAtRect(tip, activeTarget.getBoundingClientRect());
+        }
+        return;
+      }
       const btn = ev.target.closest('button.simd-tt-tab[data-tab]');
       if (!btn || !tip.contains(btn)) return;
       ev.preventDefault();
@@ -846,13 +860,15 @@
       // const int / const unsigned int -- immediate; treat as 32-bit so
       // it still has a meaningful hex form.
       if (/^const\s+(?:unsigned\s+)?int$/.test(typeName)) return { bits: 32, kind: 'int' };
-      let m = typeName.match(/^(u?)int(8|16|32|64|128)(?:x\d+)?_t$/);
+      // Allow zero or more `xN` segments so tuple types like
+      // int8x16x2_t / float32x4x3_t / poly16x4x4_t match too.
+      let m = typeName.match(/^(u?)int(8|16|32|64|128)(?:x\d+)*_t$/);
       if (m) return { bits: +m[2], kind: m[1] ? 'uint' : 'int' };
-      m = typeName.match(/^poly(8|16|32|64|128)(?:x\d+)?_t$/);
+      m = typeName.match(/^poly(8|16|32|64|128)(?:x\d+)*_t$/);
       if (m) return { bits: +m[1], kind: 'poly' };
-      m = typeName.match(/^bfloat(16)(?:x\d+)?_t$/);
+      m = typeName.match(/^bfloat(16)(?:x\d+)*_t$/);
       if (m) return { bits: 16, kind: 'bfloat' };
-      m = typeName.match(/^(?:m?float)(8|16|32|64)(?:x\d+)?_t$/);
+      m = typeName.match(/^(?:m?float)(8|16|32|64)(?:x\d+)*_t$/);
       if (m) return { bits: +m[1], kind: 'float' };
       return { bits: null, kind: null };
     }
@@ -901,15 +917,23 @@
       return slice.match(/.{1,2}/g).reverse().join('');
     }
 
+    function tupleCount(typeName) {
+      const m = (typeName || '').match(/^[a-z]+\d+x(\d+)x[234]_t$/);
+      return m ? +m[1] : 0;
+    }
+
     const rows = [];
     for (const inp of inputs) {
       const { bits, kind } = laneInfo(inp.type);
       const vals = Array.isArray(inp.values) ? inp.values : [inp.values];
+      const isPtr = /\*\s*$/.test(inp.type || '');
+      const labelName = (isPtr ? '*' : '') + (inp.name || '');
       rows.push({
-        label: (inp.name || '') + ':',
+        label: labelName + ':',
         values: vals,
         hexes: vals.map(v => hexFromValue(v, bits, kind)),
         cls: '',
+        tupleCount: tupleCount(inp.type),
       });
     }
     {
@@ -917,8 +941,15 @@
       const hexes = outVals.map((v, i) =>
         out.bytes_hex && bits ? hexFromBytes(out.bytes_hex, i, bits) : hexFromValue(v, bits, kind)
       );
-      rows.push({ label: '→', values: outVals, hexes, cls: 'simd-tt-ex-out', isOut: true });
+      rows.push({
+        label: '→', values: outVals, hexes,
+        cls: 'simd-tt-ex-out', isOut: true,
+        tupleCount: tupleCount(out.type),
+      });
     }
+
+    // Sub-vector boundaries are per-row: only register tuple rows get
+    // the thicker separator. Memory rows and plain vectors get nothing.
 
     const lanes = Math.max(1, ...rows.map(r => r.values.length));
     const cells = [];
@@ -927,17 +958,22 @@
         ? 'simd-tt-ex-lbl simd-tt-ex-arrow' : 'simd-tt-ex-lbl';
       cells.push(`<span class="${labelClass}">${escapeHtml(row.label)}</span>`);
       for (let i = 0; i < lanes; i++) {
+        const isBoundary = row.tupleCount > 0
+          && i > 0 && (i % row.tupleCount) === 0;
+        const cls = ['simd-tt-ex-val', row.cls,
+                     isBoundary ? 'simd-tt-ex-boundary' : '']
+                    .filter(Boolean).join(' ');
         if (i < row.values.length) {
           const dec = String(row.values[i]);
           const hex = row.hexes[i] || '';
           cells.push(
-            `<span class="simd-tt-ex-val ${row.cls}">` +
+            `<span class="${cls}">` +
             `<span class="simd-tt-ex-dec">${escapeHtml(dec)}</span>` +
             `<span class="simd-tt-ex-hexcell">${escapeHtml(hex)}</span>` +
             `</span>`
           );
         } else {
-          cells.push(`<span class="simd-tt-ex-val"></span>`);
+          cells.push(`<span class="${cls}"></span>`);
         }
       }
     }
@@ -1011,7 +1047,17 @@
       if (siblings.length > 0) variantList = siblings;
     }
     if (variantList) {
-      const chips = variantList.map(n => `<code>${escapeHtml(n)}</code>`).join(' ');
+      const VAR_LIMIT = 50;
+      const head = variantList.slice(0, VAR_LIMIT);
+      const tail = variantList.slice(VAR_LIMIT);
+      let chips = head.map(n => `<code>${escapeHtml(n)}</code>`).join(' ');
+      if (tail.length) {
+        chips += ' <span class="simd-tt-vars-tail" hidden>'
+          + tail.map(n => `<code>${escapeHtml(n)}</code>`).join(' ')
+          + '</span>';
+        chips += ' <button type="button" class="simd-tt-vars-more">+'
+          + tail.length + ' more</button>';
+      }
       tabs.push({
         id: 'vars',
         label: variantList.length + ' variants',
@@ -1031,7 +1077,10 @@
       togglesRow = `<div class="simd-tt-toggles">${headers}${bodies}</div>`;
     }
 
-    return `<div class="simd-tt-head"><code>${escapeHtml(name)}</code> ${families} ${archs}</div>
+    const pageUrl = `${cfg.pageBase}?intrinsic=${encodeURIComponent(name)}`;
+    const pageLink = `<a class="simd-tt-open" href="${escapeAttr(pageUrl)}" target="_blank" rel="noopener" title="Open simd.dev page">↗</a>`;
+
+    return `<div class="simd-tt-head"><code>${escapeHtml(name)}</code> ${families} ${archs}${pageLink}</div>
       <pre class="simd-tt-sig">${escapeHtml(rec.definition || '')}</pre>
       ${desc}
       ${togglesRow}
@@ -1150,6 +1199,8 @@
     .simd-tt-head code { color: #ffd479; font-weight: 600; }
     .simd-tt-tag { font-size: 10.5px; padding: 1px 6px; background: #2c5282; color: #cfe1ff; border-radius: 999px; line-height: 1.5; }
     .simd-tt-arch { font-size: 10.5px; padding: 1px 6px; background: #553c5b; color: #ffd2f0; border-radius: 999px; line-height: 1.5; }
+    .simd-tt-open { margin-left: auto; color: #8a93a3; text-decoration: none; font-size: 14px; line-height: 1; padding: 0 2px; }
+    .simd-tt-open:hover { color: #d8dde7; }
     .simd-tt-sig { margin: 0 0 6px 0; padding: 6px 8px; background: #131722; border-radius: 4px; white-space: pre-wrap; overflow-x: auto; }
     .simd-tt-typedef { display: block; margin: 0 0 6px 0; padding: 5px 8px; background: #131722; border-radius: 4px; color: #d8dde7; }
     .simd-tt-kind { font-size: 10.5px; padding: 1px 6px; background: #4a3c2a; color: #ffd58a; border-radius: 999px; line-height: 1.5; }
@@ -1228,6 +1279,19 @@
       border-radius: 3px;
       font-size: 11px;
     }
+    .simd-tt-vars-more {
+      display: inline-block;
+      margin: 0 3px 2px 0;
+      padding: 1px 7px;
+      background: transparent;
+      color: #8a93a3;
+      border: 1px dashed #4a5468;
+      border-radius: 3px;
+      font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+      cursor: pointer;
+    }
+    .simd-tt-vars-more:hover { color: #d8dde7; border-color: #6a7488; }
+    .simd-tt-vars-tail { display: contents; }
     .simd-tt-ex {
       position: relative;
       display: grid;
@@ -1250,11 +1314,17 @@
       text-align: right;
       font-variant-numeric: tabular-nums;
     }
+    .simd-tt-ex-val::after { content: ' '; }
     /* Thin vertical separators between lane columns (skipping the
        label-to-first-lane boundary so the labels float free). */
     .simd-tt-ex-val + .simd-tt-ex-val {
       border-left: 1px solid #232a39;
       padding-left: 4px;
+    }
+    /* Thicker separator at sub-vector boundaries inside tuple types. */
+    .simd-tt-ex-val.simd-tt-ex-boundary {
+      border-left: 2px solid #5e6679;
+      padding-left: 6px;
     }
     .simd-tt-ex-out { color: #5ec083; }
     .simd-tt-ex-hexcell { display: none; }

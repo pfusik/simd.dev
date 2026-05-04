@@ -277,6 +277,67 @@ def doc_url(name: str, source: str, acle_name: str | None = None) -> str:
     return ""
 
 
+def _dump_dict_per_line(d: dict, *, sort: bool = True) -> str:
+    """Render a dict as JSON with one top-level entry per line.
+
+    Each entry's value is compact (no internal newlines), so deep
+    structures stay on one logical line. Top-level keys go on their own
+    lines so a `git diff` shows exactly which entries changed.
+    """
+    items = sorted(d.items()) if sort else list(d.items())
+    parts = ["{\n"]
+    for i, (k, v) in enumerate(items):
+        sep = "," if i < len(items) - 1 else ""
+        parts.append(json.dumps(k, ensure_ascii=False))
+        parts.append(":")
+        parts.append(json.dumps(v, ensure_ascii=False, separators=(",", ":")))
+        parts.append(sep + "\n")
+    parts.append("}")
+    return "".join(parts)
+
+
+def _dump_list_per_line(items: list) -> str:
+    parts = ["[\n"]
+    for i, v in enumerate(items):
+        sep = "," if i < len(items) - 1 else ""
+        parts.append(json.dumps(v, ensure_ascii=False, separators=(",", ":")))
+        parts.append(sep + "\n")
+    parts.append("]")
+    return "".join(parts)
+
+
+def _dump_data(doc: dict) -> str:
+    """Diff-friendly serializer for simd-data.json.
+
+    Top-level shape is {version, count, records, ambiguous, clusters}.
+    `records`, `ambiguous`, and `clusters` get one entry per line.
+    """
+    parts = ["{\n"]
+    parts.append(f'"version":{json.dumps(doc["version"])},\n')
+    parts.append(f'"count":{json.dumps(doc["count"])},\n')
+    parts.append('"records":' + _dump_dict_per_line(doc["records"]) + ",\n")
+    parts.append('"ambiguous":' + _dump_dict_per_line(doc["ambiguous"]) + ",\n")
+    parts.append('"clusters":' + _dump_dict_per_line(doc["clusters"]) + "\n")
+    parts.append("}\n")
+    return "".join(parts)
+
+
+def _dump_names(doc: dict) -> str:
+    """Diff-friendly serializer for simd-names.json.
+
+    `names` and `types` are huge string arrays; one per line. The
+    `ambiguous` map similarly gets one entry per line.
+    """
+    parts = ["{\n"]
+    parts.append(f'"version":{json.dumps(doc["version"])},\n')
+    parts.append(f'"count":{json.dumps(doc["count"])},\n')
+    parts.append('"names":' + _dump_list_per_line(doc["names"]) + ",\n")
+    parts.append('"types":' + _dump_list_per_line(doc["types"]) + ",\n")
+    parts.append('"ambiguous":' + _dump_dict_per_line(doc["ambiguous"]) + "\n")
+    parts.append("}\n")
+    return "".join(parts)
+
+
 def main():
     DIST.mkdir(parents=True, exist_ok=True)
 
@@ -398,12 +459,8 @@ def main():
         "clusters": clusters,
     }
 
-    (DIST / "simd-names.json").write_text(
-        json.dumps(names_doc, ensure_ascii=False, separators=(",", ":")) + "\n"
-    )
-    (DIST / "simd-data.json").write_text(
-        json.dumps(data_doc, ensure_ascii=False, separators=(",", ":")) + "\n"
-    )
+    (DIST / "simd-names.json").write_text(_dump_names(names_doc))
+    (DIST / "simd-data.json").write_text(_dump_data(data_doc))
 
     names_size = (DIST / "simd-names.json").stat().st_size
     data_size = (DIST / "simd-data.json").stat().st_size
