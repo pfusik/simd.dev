@@ -68,6 +68,20 @@
         // Card click delegate: tab headers (open one body, close others),
         // variant chips (load that sibling's card), and family/arch tag
         // chips (toggle the corresponding filter).
+        // When a user edits an input cell, mark the output as stale
+        // (grayed out) until a fresh "run on CE" finishes.
+        $card.addEventListener('input', (ev) => {
+            const cell = ev.target.closest('.ex-dec[contenteditable]');
+            if (!cell) return;
+            const wrap = cell.closest('.ex-wrap');
+            if (wrap) wrap.classList.add('is-stale');
+            const status = wrap && wrap.querySelector('.ex-status');
+            if (status) {
+                status.textContent = 'edited — click run to recompile';
+                status.className = 'ex-status is-stale';
+            }
+        });
+
         $card.addEventListener('click', (ev) => {
             const modeBtn = ev.target.closest('button.ex-mode[data-mode]');
             if (modeBtn) {
@@ -97,6 +111,18 @@
                     const body = $card.querySelector('.card-tab-body[data-body="' + id + '"]');
                     if (body) body.hidden = false;
                 }
+                return;
+            }
+            const runBtn = ev.target.closest('button.ex-run');
+            if (runBtn) {
+                ev.preventDefault();
+                runOnCE($card.querySelector('.ex'));
+                return;
+            }
+            const seeBtn = ev.target.closest('button.ex-see');
+            if (seeBtn) {
+                ev.preventDefault();
+                seeOnCE($card.querySelector('.ex'));
                 return;
             }
             const more = ev.target.closest('button.variants-more');
@@ -501,7 +527,12 @@
 
     function renderIntrinsicPageHTML(name, rec) {
         const back = `<nav class="page-nav"><a href="./" data-back="1">← back to search</a></nav>`;
-        return back + renderCardHTML(name, rec, { expanded: true });
+        _renderExampleLive = isLiveEligible(rec);
+        try {
+            return back + renderCardHTML(name, rec, { expanded: true });
+        } finally {
+            _renderExampleLive = false;
+        }
     }
 
     function enterIntrinsicPage(name) {
@@ -620,26 +651,386 @@
             ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     }
     function escapeAttr(s) { return escapeHtml(s); }
+
+    // -------------------------------------------------------------------
+    // Type introspection (shared between renderExample and the live-edit
+    // CE flow). Hoisted to module scope so both can use them.
+    // -------------------------------------------------------------------
+    function laneInfo(typeName) {
+        if (!typeName) return { bits: null, kind: null };
+        if (/^const\s+(?:unsigned\s+)?int$/.test(typeName)) return { bits: 32, kind: 'int' };
+        let m = typeName.match(/^(u?)int(8|16|32|64|128)(?:x\d+)*_t$/);
+        if (m) return { bits: +m[2], kind: m[1] ? 'uint' : 'int' };
+        m = typeName.match(/^poly(8|16|32|64|128)(?:x\d+)*_t$/);
+        if (m) return { bits: +m[1], kind: 'poly' };
+        m = typeName.match(/^bfloat(16)(?:x\d+)*_t$/);
+        if (m) return { bits: 16, kind: 'bfloat' };
+        m = typeName.match(/^(?:m?float)(8|16|32|64)(?:x\d+)*_t$/);
+        if (m) return { bits: +m[1], kind: 'float' };
+        return { bits: null, kind: null };
+    }
+    function tupleCount(typeName) {
+        const m = (typeName || '').match(/^[a-z]+\d+x(\d+)x[234]_t$/);
+        return m ? +m[1] : 0;
+    }
+
+    // -------------------------------------------------------------------
+    // Live "edit + run on Compiler Explorer" for fold-eligible intrinsics
+    // on the dedicated /?intrinsic page.
+    // -------------------------------------------------------------------
+
+    // Eligible if scribe verified the result via the constant-fold path
+    // *and* all inputs are simple (no const-int, no pointers, no tuple
+    // params for v0). Output type may be any vector / scalar / tuple --
+    // we can decode whatever bytes come back.
+    function isLiveEligible(rec) {
+        if (!rec || !rec.example) return false;
+        if (rec.example.verified_via !== 'fold') return false;
+        for (const inp of rec.example.inputs || []) {
+            if (/\*/.test(inp.type)) return false;        // pointer
+            if (/\bconst\b/.test(inp.type)) return false; // const int
+        }
+        return true;
+    }
+
+    function laneLiteral(v, info) {
+        if (info.kind === 'float') {
+            if (info.bits === 32) return Number(v) + 'f';
+            if (info.bits === 16) return '((__fp16)' + Number(v) + 'f)';
+            return String(Number(v));  // double
+        }
+        if (info.kind === 'bfloat') return '((__bf16)' + Number(v) + 'f)';
+        return String(v);
+    }
+
+    function initList(values, typeName) {
+        const info = laneInfo(typeName);
+        const tup = tupleCount(typeName);
+        if (tup > 0) {
+            const subs = [];
+            const n = values.length / tup;
+            for (let k = 0; k < n; k++) {
+                const sub = values.slice(k * tup, (k + 1) * tup);
+                subs.push('{' + sub.map(v => laneLiteral(v, info)).join(',') + '}');
+            }
+            return '{{' + subs.join(',') + '}}';
+        }
+        return '{' + values.map(v => laneLiteral(v, info)).join(',') + '}';
+    }
+
+    // Build a small C++ source that compiles to a constant-folded RESULT
+    // global. Same shape scribe.py emits: each input gets its own named
+    // const so the harness reads as a normal program rather than a wall
+    // of inline literals.
+    function buildFoldSource(rec, inputValues) {
+        const cfg = window.SimdTooltips && window.SimdTooltips.ceConfigFor(rec);
+        if (!cfg) throw new Error('no Compiler Explorer config for this intrinsic');
+        const includes = cfg.headers.map(h => `#include <${h}>`).join('\n');
+
+        const inputs = rec.example.inputs;
+        const decls = inputs.map((inp, i) => {
+            const vals = inputValues[i];
+            return `const ${inp.type} ${inp.name} = ${initList(vals, inp.type)};`;
+        });
+        const argList = inputs.map(inp => inp.name).join(', ');
+        const retType = rec.example.output.type;
+        // C++ -- dynamic initialization at namespace scope is legal, and
+        // clang folds the call at -O2 so RESULT lands in __const /
+        // .rodata. `extern "C"` keeps the symbol unmangled.
+        return (
+            includes + '\n\n' +
+            decls.join('\n') + '\n\n' +
+            `extern "C" const ${retType} RESULT = ${rec.name}(${argList});\n`
+        );
+    }
+
+    // Parse `data.asm` (CE's structured asm output) and pull the bytes
+    // that follow the `RESULT:` label until the next label or directive
+    // we don't recognize. Returns a Uint8Array of `byteCount` bytes.
+    function parseRodataBytes(asmLines, byteCount) {
+        const text = asmLines.map(l => (typeof l === 'string' ? l : l.text || '')).join('\n');
+        const lines = text.split('\n').map(s => s.trim());
+        let i = lines.findIndex(l => /^_?RESULT:\s*$/.test(l));
+        if (i < 0) throw new Error('RESULT label not found in asm');
+        const out = [];
+        for (i++; i < lines.length && out.length < byteCount; i++) {
+            const t = lines[i];
+            if (!t || t.startsWith('//') || t.startsWith('#')) continue;
+            let m;
+            if ((m = t.match(/^\.byte\s+(.+)$/))) {
+                for (const v of m[1].split(',').map(s => s.trim())) {
+                    out.push(parseInt(v, v.startsWith('0x') ? 16 : 10) & 0xff);
+                }
+                continue;
+            }
+            if ((m = t.match(/^\.short\s+(.+)$/)) || (m = t.match(/^\.hword\s+(.+)$/))) {
+                for (const v of m[1].split(',').map(s => s.trim())) {
+                    const u = parseInt(v, v.startsWith('0x') ? 16 : 10) & 0xffff;
+                    out.push(u & 0xff, (u >>> 8) & 0xff);
+                }
+                continue;
+            }
+            if ((m = t.match(/^\.long\s+(.+)$/)) || (m = t.match(/^\.word\s+(.+)$/))) {
+                for (const v of m[1].split(',').map(s => s.trim())) {
+                    const u = parseInt(v, v.startsWith('0x') ? 16 : 10) >>> 0;
+                    out.push(u & 0xff, (u >>> 8) & 0xff, (u >>> 16) & 0xff, (u >>> 24) & 0xff);
+                }
+                continue;
+            }
+            if ((m = t.match(/^\.quad\s+(.+)$/)) || (m = t.match(/^\.xword\s+(.+)$/))) {
+                for (const v of m[1].split(',').map(s => s.trim())) {
+                    let n = BigInt(v);
+                    if (n < 0n) n = (1n << 64n) + n;
+                    for (let k = 0; k < 8; k++) out.push(Number((n >> BigInt(k * 8)) & 0xffn));
+                }
+                continue;
+            }
+            if ((m = t.match(/^\.zero\s+(\d+)/))) {
+                for (let k = 0; k < parseInt(m[1], 10); k++) out.push(0);
+                continue;
+            }
+            if (/^\.(?:size|type|globl|p2align|align|section)/.test(t)) continue;
+            if (/^[._A-Za-z]\w*:\s*$/.test(t)) break;  // next label
+            if (t.startsWith('.')) break;               // unknown directive
+        }
+        if (out.length < byteCount) {
+            throw new Error(
+                `expected ${byteCount} bytes, parsed ${out.length}`
+            );
+        }
+        return new Uint8Array(out.slice(0, byteCount));
+    }
+
+    function ceBase64Url(s) {
+        return btoa(unescape(encodeURIComponent(s)))
+            .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
+    function ceClientstateUrl(rec, inputValues) {
+        const cfg = window.SimdTooltips.ceConfigFor(rec);
+        if (!cfg) return null;
+        const source = buildFoldSource(rec, inputValues);
+        // Keep language: 'c' (same as the existing "open in CE" link
+        // -- godbolt's compiler config supplies the right default
+        // --target for that). `-x c++` forces C++ semantics so dynamic
+        // initializers for global consts are accepted.
+        const state = {
+            sessions: [{
+                id: 1, language: 'c', source,
+                compilers: [{
+                    id: cfg.compiler, options: cfg.options + ' -x c++', libs: [],
+                    filters: {
+                        binary: false, commentOnly: true, demangle: true, directives: true,
+                        execute: false, intel: false, labels: true, libraryCode: false, trim: false,
+                    },
+                }],
+            }],
+            version: 4,
+        };
+        return 'https://godbolt.org/clientstate/' + ceBase64Url(JSON.stringify(state));
+    }
+
+    async function ceCompileFold(rec, inputValues) {
+        const cfg = window.SimdTooltips && window.SimdTooltips.ceConfigFor(rec);
+        if (!cfg) throw new Error('no Compiler Explorer config');
+        const source = buildFoldSource(rec, inputValues);
+        const resp = await fetch(
+            'https://godbolt.org/api/compiler/' + encodeURIComponent(cfg.compiler) + '/compile',
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                body: JSON.stringify({
+                    source,
+                    options: {
+                        // `-x c++` forces C++ mode: dynamic initializers
+                        // for namespace-scope globals are legal there
+                        // (and clang folds the call at -O2).
+                        userArguments: cfg.options + ' -x c++',
+                        filters: {
+                            binary: false, commentOnly: true, demangle: false,
+                            directives: false, execute: false, intel: false,
+                            labels: true, libraryCode: false, trim: false,
+                        },
+                        compilerOptions: {},
+                        libraries: [],
+                    },
+                    lang: 'c++',
+                }),
+            }
+        );
+        if (!resp.ok) throw new Error('CE returned HTTP ' + resp.status);
+        const data = await resp.json();
+        if (data.code !== 0) {
+            const stderr = (data.stderr || []).map(l => l.text || l).join('\n');
+            throw new Error('clang error: ' + stderr.slice(0, 240));
+        }
+        const expected = expectedOutputBytes(rec);
+        const bytes = parseRodataBytes(data.asm || [], expected);
+        return { bytes, source };
+    }
+
+    function expectedOutputBytes(rec) {
+        // We trust the cached output's byte length -- it tells us how
+        // many bytes RESULT occupies for this intrinsic.
+        return Math.floor(rec.example.output.bytes_hex.length / 2);
+    }
+
+    function decodeOutput(rec, bytes) {
+        const out = rec.example.output;
+        const { bits, kind } = laneInfo(out.type);
+        const tup = tupleCount(out.type);
+        const totalLanes = (bytes.length * 8) / bits;
+        const values = [];
+        for (let i = 0; i < totalLanes; i++) {
+            const start = i * (bits / 8);
+            const slice = bytes.slice(start, start + bits / 8);
+            values.push(decodeLaneBytes(slice, bits, kind));
+        }
+        return values;
+    }
+
+    // Pull the user's current input values out of the editable cells.
+    function readLiveInputs(exNode, rec) {
+        const inputs = rec.example.inputs;
+        const out = inputs.map(inp =>
+            new Array(Array.isArray(inp.values) ? inp.values.length : 1));
+        for (const cell of exNode.querySelectorAll('.ex-val[data-row][data-lane]')) {
+            const ri = +cell.dataset.row, li = +cell.dataset.lane;
+            const dec = cell.querySelector('.ex-dec');
+            if (!dec) continue;
+            const text = dec.textContent.trim();
+            const ti = laneInfo(inputs[ri].type);
+            let v;
+            if (ti.kind === 'float' || ti.kind === 'bfloat') {
+                v = Number(text);
+                if (Number.isNaN(v)) throw new Error(
+                    inputs[ri].name + '[' + li + '] = "' + text + '" is not a number'
+                );
+            } else {
+                if (!/^[+-]?\d+$/.test(text)) throw new Error(
+                    inputs[ri].name + '[' + li + '] = "' + text + '" is not an integer'
+                );
+                v = parseInt(text, 10);
+            }
+            out[ri][li] = v;
+        }
+        return out;
+    }
+
+    function seeOnCE(exNode) {
+        const params = new URLSearchParams(location.search);
+        const name = params.get('intrinsic');
+        const rec = name && records[name];
+        if (!rec) return;
+        try {
+            const inputValues = readLiveInputs(exNode, rec);
+            const url = ceClientstateUrl(rec, inputValues);
+            if (url) window.open(url, '_blank', 'noopener');
+        } catch (err) {
+            const status = exNode.parentElement.querySelector('.ex-status');
+            if (status) {
+                status.textContent = String(err.message || err);
+                status.className = 'ex-status is-error';
+            }
+        }
+    }
+
+    async function runOnCE(exNode) {
+        // Find the rec via the URL (we're on /?intrinsic=NAME).
+        const params = new URLSearchParams(location.search);
+        const name = params.get('intrinsic');
+        const rec = name && records[name];
+        if (!rec) return;
+        const status = exNode.parentElement.querySelector('.ex-status');
+        if (status) {
+            status.textContent = 'compiling on godbolt.org…';
+            status.className = 'ex-status is-busy';
+        }
+        try {
+            const inputValues = readLiveInputs(exNode, rec);
+            const { bytes } = await ceCompileFold(rec, inputValues);
+            const outValues = decodeOutput(rec, bytes);
+            // Update the output row in place.
+            updateOutputRow(exNode, rec, bytes, outValues);
+            if (status) {
+                status.textContent = 'verified on Compiler Explorer ✓';
+                status.className = 'ex-status is-ok';
+            }
+        } catch (err) {
+            if (status) {
+                status.textContent = String(err.message || err);
+                status.className = 'ex-status is-error';
+            }
+        }
+    }
+
+    function updateOutputRow(exNode, rec, bytes, outValues) {
+        // We rebuild the entire .ex panel because output cells may need
+        // updated dec + hex spans across many lanes; in-place tweaking is
+        // fiddlier than a re-render.
+        const newOut = Object.assign({}, rec.example.output, {
+            bytes_hex: Array.from(bytes).map(b =>
+                b.toString(16).padStart(2, '0')).join(''),
+            values: outValues,
+        });
+        const newExample = Object.assign({}, rec.example, { output: newOut });
+        // Persist the user's currently-edited inputs into the rec so
+        // re-render shows them (otherwise we'd snap back to cached vals).
+        const liveInputs = readLiveInputs(exNode, rec);
+        newExample.inputs = rec.example.inputs.map((inp, i) =>
+            Object.assign({}, inp, { values: liveInputs[i] })
+        );
+        rec.example = newExample;
+        // Preserve the live-edit affordances on re-render. Replace the
+        // whole .ex-wrap (panel + buttons + status) so we don't leave
+        // duplicate buttons behind.
+        const wrap = exNode.closest('.ex-wrap');
+        _renderExampleLive = true;
+        try {
+            (wrap || exNode).outerHTML = renderExample(newExample);
+        } finally {
+            _renderExampleLive = false;
+        }
+    }
+
+    function decodeLaneBytes(bytes, bits, kind) {
+        if (kind === 'float') {
+            if (bits === 32) return new Float32Array(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + 4))[0];
+            if (bits === 64) return new Float64Array(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + 8))[0];
+            if (bits === 16 && typeof Float16Array !== 'undefined') {
+                return new Float16Array(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + 2))[0];
+            }
+        }
+        if (kind === 'bfloat' && bits === 16) {
+            const buf = new ArrayBuffer(4);
+            new Uint8Array(buf).set([0, 0, bytes[0], bytes[1]]);
+            return new Float32Array(buf)[0];
+        }
+        if (bits <= 32) {
+            let n = 0;
+            for (let i = bytes.length - 1; i >= 0; i--) n = (n * 256) + bytes[i];
+            if (kind === 'int' && (bytes[bytes.length - 1] & 0x80)) {
+                n -= Math.pow(2, bits);
+            }
+            return n;
+        }
+        // 64-bit
+        let big = 0n;
+        for (let i = bytes.length - 1; i >= 0; i--) big = (big << 8n) | BigInt(bytes[i]);
+        if (kind === 'int' && (bytes[bytes.length - 1] & 0x80)) {
+            big -= 1n << BigInt(bits);
+        }
+        return big.toString();  // string for safe display past Number precision
+    }
+    // Set when caller is rendering the dedicated /?intrinsic page and the
+    // record is live-editable. Switches the example body to editable
+    // inputs + a "run on CE" button.
+    let _renderExampleLive = false;
+
     function renderExample(ex) {
         const inputs = ex.inputs || [];
         const out = ex.output || {};
         const outVals = Array.isArray(out.values) ? out.values : [out.values];
 
-        function laneInfo(typeName) {
-            if (!typeName) return { bits: null, kind: null };
-            if (/^const\s+(?:unsigned\s+)?int$/.test(typeName)) return { bits: 32, kind: 'int' };
-            // Allow zero or more `xN` segments so tuple types like
-            // int8x16x2_t / float32x4x3_t / poly16x4x4_t match too.
-            let m = typeName.match(/^(u?)int(8|16|32|64|128)(?:x\d+)*_t$/);
-            if (m) return { bits: +m[2], kind: m[1] ? 'uint' : 'int' };
-            m = typeName.match(/^poly(8|16|32|64|128)(?:x\d+)*_t$/);
-            if (m) return { bits: +m[1], kind: 'poly' };
-            m = typeName.match(/^bfloat(16)(?:x\d+)*_t$/);
-            if (m) return { bits: 16, kind: 'bfloat' };
-            m = typeName.match(/^(?:m?float)(8|16|32|64)(?:x\d+)*_t$/);
-            if (m) return { bits: +m[1], kind: 'float' };
-            return { bits: null, kind: null };
-        }
         function hexFromValue(v, bits, kind) {
             if (bits == null) return String(v);
             const len = bits / 4;
@@ -683,15 +1074,9 @@
             return slice.match(/.{1,2}/g).reverse().join('');
         }
 
-        // tupleCount: lanes per sub-vector for tuple types (int8x16x2_t -> 16);
-        // 0 means "not a tuple".
-        function tupleCount(typeName) {
-            const m = (typeName || '').match(/^[a-z]+\d+x(\d+)x[234]_t$/);
-            return m ? +m[1] : 0;
-        }
-
         const rows = [];
-        for (const inp of inputs) {
+        for (let ri = 0; ri < inputs.length; ri++) {
+            const inp = inputs[ri];
             const { bits, kind } = laneInfo(inp.type);
             const vals = Array.isArray(inp.values) ? inp.values : [inp.values];
             // Pointer params (loads) show what the intrinsic *reads from*
@@ -705,6 +1090,7 @@
                 hexes: vals.map(v => hexFromValue(v, bits, kind)),
                 cls: '',
                 tupleCount: tupleCount(inp.type),
+                rowIdx: ri,
             });
         }
         {
@@ -736,9 +1122,16 @@
                 if (i < row.values.length) {
                     const dec = String(row.values[i]);
                     const hex = row.hexes[i] || '';
+                    // Inputs become contenteditable on the live-edit page.
+                    const editable = _renderExampleLive && !row.isOut
+                        ? ` contenteditable="true" spellcheck="false"`
+                        : '';
+                    const dataAttrs = _renderExampleLive && !row.isOut
+                        ? ` data-row="${row.rowIdx}" data-lane="${i}"`
+                        : '';
                     cells.push(
-                        `<span class="${cls}">` +
-                        `<span class="ex-dec">${escapeHtml(dec)}</span>` +
+                        `<span class="${cls}"${dataAttrs}>` +
+                        `<span class="ex-dec"${editable}>${escapeHtml(dec)}</span>` +
                         `<span class="ex-hexcell">${escapeHtml(hex)}</span>` +
                         `</span>`
                     );
@@ -753,6 +1146,24 @@
             `<button type="button" class="ex-mode is-active" data-mode="dec" aria-pressed="true">dec</button>` +
             `<button type="button" class="ex-mode" data-mode="hex" aria-pressed="false">hex</button>` +
             `</div>`;
-        return `<div class="ex" style="grid-template-columns:${cols}">${toggle}${cells.join('')}</div>`;
+        const runBtn = _renderExampleLive
+            ? `<button type="button" class="ex-run" title="Re-compile on Compiler Explorer">↻ run on CE</button>`
+            + `<button type="button" class="ex-see" title="Open the harness in Compiler Explorer">↗ see on CE</button>`
+            : '';
+        const status = _renderExampleLive
+            ? `<div class="ex-status" role="status"></div>`
+            : '';
+        const hint = _renderExampleLive
+            ? `<div class="ex-hint"><em>input values are editable</em> — change a number, then click <strong>↻ run on CE</strong> to recompile and refresh the result.</div>`
+            : '';
+        // Wrap so updateOutputRow can replace the entire example block
+        // (hint + panel + buttons + status) atomically without leaving
+        // stragglers.
+        return (
+            `<div class="ex-wrap">` + hint +
+            `<div class="ex" style="grid-template-columns:${cols}">${toggle}${cells.join('')}</div>` +
+            runBtn + status +
+            `</div>`
+        );
     }
 })();

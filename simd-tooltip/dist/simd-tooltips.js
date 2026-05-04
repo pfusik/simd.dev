@@ -89,6 +89,10 @@
     unwrap: unwrap,              // wrap-mode only: remove all wrappers
     hide: hide,
     compilerExplorerUrl: function (rec) { return compilerExplorerUrl(rec); },
+    // Compiler / march / headers for `rec`. Used by simd.dev's "run on CE"
+    // feature to build a custom harness with the same toolchain that
+    // produced the cached worked example.
+    ceConfigFor: function (rec) { return ceConfigFor(rec); },
     _state: () => ({ cfg, nameCount: nameSet ? nameSet.size : 0, recordCount: records ? Object.keys(records).length : 0 }),
   };
 
