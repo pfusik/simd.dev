@@ -444,6 +444,17 @@ button.tag-filter:hover, button.tag-filter:focus-visible {
     padding-left: 6px;
 }
 .ex-out { color: #2c8a55; font-weight: 700; }
+/* Output cells that just changed after a successful "run on CE" --
+   subtle yellow background that fades out over a few seconds. */
+.ex-val.ex-changed {
+    background: #fff3c4;
+    border-radius: 2px;
+    animation: ex-changed-fade 5s ease-out forwards;
+}
+@keyframes ex-changed-fade {
+    from { background: #ffe18a; }
+    to   { background: transparent; }
+}
 .ex-hexcell { display: none; }
 .ex.hex .ex-dec { display: none; }
 .ex.hex .ex-hexcell { display: inline; }

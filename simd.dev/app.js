@@ -1126,9 +1126,17 @@
     }
 
     function updateOutputRow(exNode, rec, bytes, outValues) {
-        // We rebuild the entire .ex panel because output cells may need
-        // updated dec + hex spans across many lanes; in-place tweaking is
-        // fiddlier than a re-render.
+        // Compute which output lanes actually changed so the renderer
+        // can flag them (.ex-changed). Compare strings to side-step
+        // BigInt vs Number coercion quirks.
+        const oldValues = (rec.example.output && rec.example.output.values) || [];
+        const changedOutputLanes = new Set();
+        for (let i = 0; i < outValues.length; i++) {
+            if (String(oldValues[i]) !== String(outValues[i])) {
+                changedOutputLanes.add(i);
+            }
+        }
+
         const newOut = Object.assign({}, rec.example.output, {
             bytes_hex: Array.from(bytes).map(b =>
                 b.toString(16).padStart(2, '0')).join(''),
@@ -1142,14 +1150,13 @@
             Object.assign({}, inp, { values: liveInputs[i] })
         );
         rec.example = newExample;
-        // Preserve the live-edit affordances on re-render. Replace the
-        // whole .ex-wrap (panel + buttons + status) so we don't leave
-        // duplicate buttons behind.
         const wrap = exNode.closest('.ex-wrap');
         _renderExampleViewable = isLiveViewable(rec);
         _renderExampleRunnable = isLiveRunnable(rec);
         try {
-            (wrap || exNode).outerHTML = renderExample(newExample, rec.name);
+            (wrap || exNode).outerHTML = renderExample(
+                newExample, rec.name, { changedOutputLanes }
+            );
         } finally {
             _renderExampleViewable = false;
             _renderExampleRunnable = false;
@@ -1203,7 +1210,10 @@
         return laneInfo(typeName);
     }
 
-    function renderExample(ex, intrinsicName) {
+    // `highlight` (optional): { changedOutputLanes: Set<number> } -- cells
+    // in the output row whose values changed since the last render get
+    // an `.ex-changed` class. Used right after a successful "run on CE".
+    function renderExample(ex, intrinsicName, highlight) {
         const inputs = ex.inputs || [];
         const out = ex.output || {};
         const outVals = Array.isArray(out.values) ? out.values : [out.values];
@@ -1306,8 +1316,12 @@
                     const dataAttrs = _renderExampleViewable && !row.isOut
                         ? ` data-row="${row.rowIdx}" data-lane="${i}"`
                         : '';
+                    const changed = row.isOut && highlight
+                        && highlight.changedOutputLanes
+                        && highlight.changedOutputLanes.has(i)
+                        ? ' ex-changed' : '';
                     cells.push(
-                        `<span class="${cls}"${dataAttrs}>` +
+                        `<span class="${cls}${changed}"${dataAttrs}>` +
                         `<span class="ex-dec"${editable}>${escapeHtml(dec)}</span>` +
                         `<span class="ex-hexcell">${escapeHtml(hex)}</span>` +
                         `</span>`
