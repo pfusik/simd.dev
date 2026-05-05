@@ -125,7 +125,14 @@ function formatHover(name, rec, config) {
         }
     }
 
-    // Footer links: upstream docs + Compiler Explorer.
+    // Worked example (verified by simd-scribe -- a real round-tripped
+    // input/output pair).
+    if (rec.example) {
+        md.appendMarkdown('\n**example:**\n');
+        md.appendCodeblock(formatExample(rec.example), 'text');
+    }
+
+    // Footer links: upstream docs + Compiler Explorer + simd.dev page.
     const links = [];
     if (rec.doc_url) {
         const label = rec.source === 'arm-acle' ? 'Arm developer docs' : 'Intel Intrinsics Guide';
@@ -134,6 +141,10 @@ function formatHover(name, rec, config) {
     const ceUrl = compilerExplorerUrl(rec);
     if (ceUrl) {
         links.push(`[Compiler Explorer →](${ceUrl})`);
+    }
+    if (rec.example) {
+        const safe = encodeURIComponent(name);
+        links.push(`[Editable example on simd.dev →](https://simd.dev/?intrinsic=${safe})`);
     }
     if (links.length) md.appendMarkdown('\n' + links.join(' · ') + '\n');
 
@@ -274,6 +285,42 @@ function compilerExplorerUrl(rec) {
     const utf8 = Buffer.from(JSON.stringify(state), 'utf8').toString('base64');
     const safe = utf8.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
     return 'https://godbolt.org/clientstate/' + safe;
+}
+
+// ---------------------------------------------------------------------------
+// Example formatter -- inputs + output, column-aligned for the hover.
+// ---------------------------------------------------------------------------
+function formatExample(ex) {
+    const inputs = ex.inputs || [];
+    const out = ex.output || {};
+    const outVals = Array.isArray(out.values) ? out.values : [out.values];
+
+    const rows = [];
+    for (const inp of inputs) {
+        const isPtr = /\*\s*$/.test(inp.type || '');
+        rows.push({
+            label: (isPtr ? '*' : '') + (inp.name || '') + ':',
+            values: Array.isArray(inp.values) ? inp.values : [inp.values],
+        });
+    }
+    rows.push({ label: '→', values: outVals });
+
+    const lanes = Math.max(1, ...rows.map(r => r.values.length));
+    const colWidths = new Array(lanes).fill(0);
+    for (const r of rows) {
+        for (let i = 0; i < r.values.length; i++) {
+            const w = String(r.values[i]).length;
+            if (w > colWidths[i]) colWidths[i] = w;
+        }
+    }
+    const labelWidth = Math.max(...rows.map(r => r.label.length));
+
+    return rows.map(r => {
+        const cells = r.values.map((v, i) =>
+            String(v).padStart(colWidths[i], ' ')
+        ).join(' ');
+        return r.label.padEnd(labelWidth, ' ') + ' ' + cells;
+    }).join('\n');
 }
 
 module.exports = { activate, deactivate };

@@ -31,7 +31,8 @@
         "onLanguage:c",
         "onLanguage:cpp",
         "onLanguage:objective-c",
-        "onLanguage:objective-cpp"
+        "onLanguage:objective-cpp",
+        "onLanguage:markdown"
     ],
     "contributes": {
         "configuration": {
@@ -46,7 +47,7 @@
                 "simdVscode.languages": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "default": ["c", "cpp", "objective-c", "objective-cpp"],
+                    "default": ["c", "cpp", "objective-c", "objective-cpp", "markdown"],
                     "description": "Language IDs where the SIMD hover provider is active."
                 }
             }
