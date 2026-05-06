@@ -428,9 +428,12 @@ button.tag-filter:hover, button.tag-filter:focus-visible {
     text-align: right;
     font-variant-numeric: tabular-nums;
 }
-/* Insert a copyable space after each cell so selecting a row and
-   pasting yields "1 2 3 4" instead of "1234". */
-.ex-val::after { content: ' '; }
+/* A real-text trailing space inside each cell so selecting a row and
+   copy-pasting yields "1 2 3 4" instead of "1234". `white-space: pre`
+   keeps the space alive against whitespace-collapse rules; tiny
+   font-size shrinks it visually to a hairline (still a real space char
+   in the DOM, so copy/paste behavior is unaffected). */
+.ex-pad { white-space: pre; font-size: 1px; }
 /* Thin vertical separators between lane columns (skipping the
    label-to-first-lane boundary so the labels float free). */
 .ex-val + .ex-val {

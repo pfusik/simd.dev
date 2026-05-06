@@ -1345,6 +1345,7 @@
                         `<span class="${cls}${changed}"${dataAttrs}>` +
                         `<span class="ex-dec"${editable}>${escapeHtml(dec)}</span>` +
                         `<span class="ex-hexcell">${escapeHtml(hex)}</span>` +
+                        `<span class="ex-pad"> </span>` +
                         `</span>`
                     );
                 } else {
