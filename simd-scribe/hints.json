@@ -1,0 +1,16 @@
+{
+  "_comment": "Per-pattern overrides for scribe input generation. Top-level keys are regex patterns matched (re.search) against the intrinsic name; values map parameter names to scalars (immediates) or lists (vector / pointer buffers). Lists are truncated to the per-variant lane count and cycled if shorter; multiple matching patterns merge in declaration order with later entries winning. Underscore-prefixed keys (like _comment) are ignored.",
+
+  "^vsetq_lane_": {"lane": 1},
+
+  "^v(?:qtbl|qtbx|tbl|tbx)\\d+q?_": {
+    "a": [100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115],
+    "t": [
+      20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,
+      40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,
+      60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,
+      80,81,82,83,84,85,86,87,88,89,50,91,92,93,94,95
+    ],
+    "idx": [0, 1, 17, 34, 51, 5, 99, 24, 40, 3, 56, 0, 115, 7, 11]
+  }
+}

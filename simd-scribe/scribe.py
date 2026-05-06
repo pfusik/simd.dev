@@ -48,6 +48,55 @@ def _rosetta_available() -> bool:
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = REPO_ROOT / "data" / "intrinsics.jsonl"
+HINTS_PATH = Path(__file__).resolve().parent / "hints.json"
+
+
+@functools.lru_cache(maxsize=1)
+def _load_hints() -> list[tuple["re.Pattern[str]", dict]]:
+    """Compiled (pattern, params) pairs from hints.json. Empty if absent.
+
+    Format: top-level dict whose keys are regex patterns matched against
+    the intrinsic name (re.search), and whose values are param-name → hint
+    dicts. Hint values are scalars (immediates) or lists (vector / pointer
+    buffers); lists are truncated to the per-variant lane count and cycled
+    if shorter. Multiple patterns may match the same name; matches merge
+    in declaration order with later entries overriding earlier ones on
+    the same param-name.
+    """
+    if not HINTS_PATH.exists():
+        return []
+    raw = json.loads(HINTS_PATH.read_text())
+    # Underscore-prefixed keys (like `_comment`) are reserved for inline
+    # documentation. Skip them so they don't get compiled as regexes.
+    return [
+        (re.compile(pat), params)
+        for pat, params in raw.items()
+        if not pat.startswith("_")
+    ]
+
+
+@functools.lru_cache(maxsize=4096)
+def _hints_for(intrinsic_name: str) -> dict:
+    merged: dict = {}
+    for pat, params in _load_hints():
+        if pat.search(intrinsic_name):
+            merged.update(params)
+    return merged
+
+
+def _apply_hint_list(hint, count: int) -> list:
+    """Stretch a hint value to `count` lanes: truncate if too long,
+    cycle if too short. A scalar repeats across all lanes."""
+    if not isinstance(hint, list):
+        return [hint] * count
+    if not hint:
+        raise ValueError("hint list must not be empty")
+    if len(hint) >= count:
+        return list(hint[:count])
+    out: list = []
+    while len(out) < count:
+        out.extend(hint)
+    return out[:count]
 
 LLVM_OBJDUMP = (
     "/Applications/Xcode.app/Contents/Developer/Toolchains/"
@@ -526,6 +575,7 @@ def build_inputs(sig: "Signature") -> list[list]:
     if is_intel_intrinsic(sig.name):
         return _build_inputs_intel(sig)
 
+    hints = _hints_for(sig.name)
     out: list[list] = []
     # How many elements the pointer-loaded buffer should hold:
     #   vld1   -> total lanes of the (sub-)vector return
@@ -547,6 +597,10 @@ def build_inputs(sig: "Signature") -> list[list]:
         # element index -- 0 is always valid; non-zero would fail on
         # 1-lane vectors like int64x1_t.
         if p.type_name in ("const int", "const unsigned int"):
+            if p.name in hints:
+                hv = hints[p.name]
+                out.append([int(hv[0] if isinstance(hv, list) else hv)])
+                continue
             zero_by_name = p.name in ("lane", "lane1", "lane2", "i", "index", "idx")
             zero_by_op = sig.name.startswith(("vext_", "vextq_"))
             out.append([0 if (zero_by_name or zero_by_op) else 1])
@@ -563,7 +617,12 @@ def build_inputs(sig: "Signature") -> list[list]:
             elem_ti = type_info(elem)
             if elem_ti is None:
                 raise ValueError(f"unknown element type for pointer: {p.type_name}")
-            if elem_ti.kind in ("float", "bfloat"):
+            if p.name in hints:
+                vals = _apply_hint_list(hints[p.name], load_count)
+                if elem_ti.kind in ("float", "bfloat"):
+                    vals = [float(v) for v in vals]
+                out.append(vals)
+            elif elem_ti.kind in ("float", "bfloat"):
                 out.append([float(i) for i in range(1, load_count + 1)])
             else:
                 out.append(list(range(1, load_count + 1)))
@@ -578,7 +637,13 @@ def build_inputs(sig: "Signature") -> list[list]:
         ti = type_info(p.type_name)
         if ti is None:
             raise ValueError(f"unsupported type: {p.type_name}")
-        out.append(_values_for(ti, role, ti.total_lanes))
+        if p.name in hints:
+            vals = _apply_hint_list(hints[p.name], ti.total_lanes)
+            if ti.kind in ("float", "bfloat"):
+                vals = [float(v) for v in vals]
+            out.append(vals)
+        else:
+            out.append(_values_for(ti, role, ti.total_lanes))
 
     return out
 
@@ -595,6 +660,7 @@ def _build_inputs_intel(sig: "Signature") -> list[list]:
     """Intel variant of build_inputs. `__m128i` etc. need the intrinsic
     name to know lane shape; pointers and immediates have the same
     handling as ARM."""
+    hints = _hints_for(sig.name)
     out: list[list] = []
     for i, p in enumerate(sig.params):
         role = "a" if i == 0 else "b"
@@ -602,19 +668,35 @@ def _build_inputs_intel(sig: "Signature") -> list[list]:
         # immediate (mask, lane index, rounding mode, ...). 0 is a safe
         # default for all of them.
         if p.type_name in _INTEL_IMM_TYPES:
-            out.append([0])
+            if p.name in hints:
+                hv = hints[p.name]
+                out.append([int(hv[0] if isinstance(hv, list) else hv)])
+            else:
+                out.append([0])
             continue
         # Skip pointers / non-vector tricky params for v0.
         if "*" in p.type_name:
             raise ValueError(f"intel pointer param not supported yet: {p.type_name}")
         if p.type_name in INTEL_VEC_BYTES:
             ti = intel_lane_info_for(sig.name, p.type_name, context="input")
-            out.append(_values_for(ti, role, ti.count))
+            if p.name in hints:
+                vals = _apply_hint_list(hints[p.name], ti.count)
+                if ti.kind in ("float", "bfloat"):
+                    vals = [float(v) for v in vals]
+                out.append(vals)
+            else:
+                out.append(_values_for(ti, role, ti.count))
             continue
         ti = type_info(p.type_name)
         if ti is None:
             raise ValueError(f"unsupported intel param type: {p.type_name}")
-        out.append(_values_for(ti, role, ti.total_lanes))
+        if p.name in hints:
+            vals = _apply_hint_list(hints[p.name], ti.total_lanes)
+            if ti.kind in ("float", "bfloat"):
+                vals = [float(v) for v in vals]
+            out.append(vals)
+        else:
+            out.append(_values_for(ti, role, ti.total_lanes))
     return out
 
 

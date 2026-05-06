@@ -21,6 +21,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from scribe import (  # noqa: E402
     DB_PATH,
+    HINTS_PATH,
+    _load_hints,
     build_inputs,
     compile_and_extract,
     compile_flags_for,
@@ -132,6 +134,14 @@ def main() -> int:
     ap.add_argument("--refresh", action="store_true",
                     help="ignore the existing cache shard; recompute everything")
     args = ap.parse_args()
+
+    # Fail fast on a malformed hints.json so we don't fan it out across
+    # thousands of worker subprocesses each hitting the same parse error.
+    try:
+        _load_hints()
+    except json.JSONDecodeError as e:
+        print(f"hints: {HINTS_PATH} is not valid JSON: {e}", file=sys.stderr)
+        return 2
 
     fams = set(args.family) if args.family else None
     sources = set(args.source) if args.source else None
@@ -275,7 +285,13 @@ def main() -> int:
                 "output": ex["output"],
                 "verified_at": ex.get("verified_at") or today,
             })
-        added, updated = upsert_cache(Path(args.cache_out), cache_entries)
+        # Every candidate we examined this run gets its cache rows
+        # rewritten to match current inputs; stale (different-hash) rows
+        # for the same intrinsic are evicted.
+        replace = {r["intrinsic"] for r in candidates}
+        added, updated = upsert_cache(
+            Path(args.cache_out), cache_entries, replace_intrinsics=replace,
+        )
         print()
         print(f"Cache {args.cache_out}: +{added} new, ~{updated} updated, "
               f"total entries written = {added + updated}")

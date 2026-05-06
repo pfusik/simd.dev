@@ -50,10 +50,18 @@ def inputs_hash(inputs: list[dict]) -> str:
     return hashlib.sha1(payload.encode()).hexdigest()[:8]
 
 
-def upsert_cache(cache_path: Path, new_entries: list[dict]) -> tuple[int, int]:
+def upsert_cache(
+    cache_path: Path,
+    new_entries: list[dict],
+    replace_intrinsics: set[str] | None = None,
+) -> tuple[int, int]:
     """Merge new_entries into cache_path keyed by (intrinsic, inputs_hash).
 
-    Returns (added, updated). Existing entries with no key match are kept.
+    Returns (added, updated). Existing entries with no key match are kept,
+    *except* for intrinsics in `replace_intrinsics`: any pre-existing
+    entry whose intrinsic is in that set and whose key isn't matched by
+    `new_entries` gets evicted (used to drop stale rows when canonical
+    inputs change, e.g. via hints.json).
     Output is sorted by (intrinsic, inputs_hash) for stable diffs.
     """
     existing: dict[tuple[str, str], dict] = {}
@@ -66,6 +74,13 @@ def upsert_cache(cache_path: Path, new_entries: list[dict]) -> tuple[int, int]:
                 e = json.loads(line)
                 key = (e["intrinsic"], e["inputs_hash"])
                 existing[key] = e
+
+    new_keys = {(e["intrinsic"], e["inputs_hash"]) for e in new_entries}
+    if replace_intrinsics:
+        existing = {
+            k: v for k, v in existing.items()
+            if k[0] not in replace_intrinsics or k in new_keys
+        }
 
     added = updated = 0
     for entry in new_entries:
