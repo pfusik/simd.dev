@@ -33,12 +33,13 @@ from scribe import (  # noqa: E402
 
 def compiler_id() -> str:
     """A short, stable identifier for the local toolchain."""
+    from scribe import CLANG  # local import to avoid cycles at module load
     try:
         out = subprocess.run(
-            ["clang++", "--version"], capture_output=True, text=True, check=True
+            [CLANG, "--version"], capture_output=True, text=True, check=True
         ).stdout
         first_line = out.splitlines()[0] if out else "clang"
-        # e.g. "Apple clang version 17.0.0 (clang-1700.4.4.1)"
+        # e.g. "Homebrew clang version 22.1.4"
         return first_line.strip()
     except Exception:
         return "clang (unknown version)"

@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import functools
 import json
+import os
 import re
 import struct
 import subprocess
@@ -98,10 +99,64 @@ def _apply_hint_list(hint, count: int) -> list:
         out.extend(hint)
     return out[:count]
 
-LLVM_OBJDUMP = (
-    "/Applications/Xcode.app/Contents/Developer/Toolchains/"
-    "XcodeDefault.xctoolchain/usr/bin/llvm-objdump"
+# Use Homebrew LLVM (currently 22.x) so our fold behavior matches the
+# clang-trunk that godbolt's CE iframe uses, not the older Apple Clang
+# that lags by a release or two. Override with $SIMD_SCRIBE_LLVM_BIN if
+# you have a different toolchain installed.
+LLVM_BIN = os.environ.get(
+    "SIMD_SCRIBE_LLVM_BIN", "/opt/homebrew/Cellar/llvm/22.1.4/bin"
 )
+CLANG = f"{LLVM_BIN}/clang++"
+LLVM_OBJDUMP = f"{LLVM_BIN}/llvm-objdump"
+
+# Minimum clang major required to reproduce the cached fold/execute
+# classifications. v22 is where table-lookup IR folding, FRINT (v8.5a)
+# and MMLA (i8mm) intrinsics all work; older versions silently produce
+# fewer fold entries and drop ~150 NEON intrinsics from the cache.
+_MIN_CLANG_MAJOR = 22
+
+
+@functools.lru_cache(maxsize=1)
+def _check_clang_version() -> None:
+    """Fail fast if CLANG is older than what the cache was built with."""
+    proc = subprocess.run(
+        [CLANG, "--version"], capture_output=True, text=True,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"scribe: cannot run {CLANG!r}: {proc.stderr.strip() or 'no stderr'}"
+        )
+    m = re.search(r"clang version (\d+)", proc.stdout)
+    if not m:
+        raise RuntimeError(
+            f"scribe: cannot parse clang version from {proc.stdout!r}"
+        )
+    major = int(m.group(1))
+    if major < _MIN_CLANG_MAJOR:
+        raise RuntimeError(
+            f"scribe needs clang >= {_MIN_CLANG_MAJOR} (got {major}). "
+            f"Older clangs lose ~150 NEON intrinsics (FRINT/MMLA/...) and "
+            f"miss table-lookup fold opportunities. Install Homebrew LLVM "
+            f"and point $SIMD_SCRIBE_LLVM_BIN at it (currently {CLANG})."
+        )
+
+
+@functools.lru_cache(maxsize=1)
+def _macos_sdk_path() -> str | None:
+    """Resolve the active macOS SDK so Homebrew clang sees system libc/libc++.
+
+    Homebrew's clang doesn't ship an Apple sysroot; without -isysroot it
+    falls back to a stub path and the libc++ headers blow up looking for
+    `mbstate_t`. We ask `xcrun` once and reuse the answer.
+    """
+    try:
+        out = subprocess.run(
+            ["xcrun", "--sdk", "macosx", "--show-sdk-path"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        return out or None
+    except Exception:
+        return None
 
 
 @dataclass(frozen=True)
@@ -790,15 +845,27 @@ def render_init_list(values: list, ti: TypeInfo) -> str:
     return "{ " + ", ".join(render_lane_literal(v, ti) for v in values) + " }"
 
 
+# aarch64 march that enables every NEON-relevant feature we care about
+# (i8mm/bf16/fp16/dotprod for matmul + dot, sm4 for SM3/SM4, sha3 for
+# vsha512* / vrax1*, v8.5a for vrnd32*/vrnd64*, crypto for AES). This
+# mirrors the godbolt CE config so local fold/execute classifications
+# match what the user sees in the live iframe. Apple Clang 17 had most
+# of these on by default on the M-series host, but trunk LLVM is stricter.
+_AARCH64_MARCH = (
+    "-march=armv8.6-a+fp16+bf16+i8mm+dotprod+crypto+sha3+sm4"
+)
+
+
 def compile_flags_for(sig: Signature, family_list: list[str] | None = None) -> list[str]:
     """Extra clang flags needed to compile an intrinsic of this signature.
 
-    Returns [] for ARM intrinsics (we compile natively on aarch64). For
-    Intel intrinsics, returns -target + -m<feature> based on the family
-    list from the DB record (e.g. ['SSE4.1'] -> ['-target', ..., '-msse4.1']).
+    For ARM, supply an aarch64 -march that activates every feature any
+    NEON intrinsic can require (FRINT/MMLA/SM3/SHA3/...). For Intel,
+    returns -target + -m<feature> based on the family list from the DB
+    record (e.g. ['SSE4.1'] -> ['-target', ..., '-msse4.1']).
     """
     if not is_intel_intrinsic(sig.name):
-        return []
+        return [_AARCH64_MARCH]
     return intel_compile_flags(family_list or [])
 
 
@@ -1019,6 +1086,7 @@ def compile_and_extract(
     """
     if expected_bytes is None:
         raise ValueError("compile_and_extract requires expected_bytes")
+    _check_clang_version()
     with tempfile.TemporaryDirectory() as td:
         td_path = Path(td)
         src = td_path / "harness.cc"
@@ -1027,11 +1095,15 @@ def compile_and_extract(
         src.write_text(source)
 
         # Phase 1: compile to .o.
-        cmd = ["clang++", "-O2", "-c", str(src), "-o", str(obj)]
+        cmd = [CLANG, "-O2", "-c", str(src), "-o", str(obj)]
         if target_triple:
             cmd[1:1] = ["-target", target_triple]
         if extra_flags:
             cmd[1:1] = list(extra_flags)
+        # Homebrew clang has no built-in sysroot: point it at Xcode's SDK.
+        sdk = _macos_sdk_path()
+        if sdk:
+            cmd[1:1] = ["-isysroot", sdk]
         proc = subprocess.run(cmd, capture_output=True, text=True)
         if proc.returncode != 0:
             raise RuntimeError(
@@ -1081,11 +1153,14 @@ def compile_and_extract(
                 "Constant-fold path failed and execute fallback is "
                 "disabled when cross-compiling (would need an emulator)."
             )
-        link_cmd = ["clang++", "-O2", str(src), "-o", str(exe)]
+        link_cmd = [CLANG, "-O2", str(src), "-o", str(exe)]
         if target_triple:
             link_cmd[1:1] = ["-target", target_triple]
         if extra_flags:
             link_cmd[1:1] = list(extra_flags)
+        sdk = _macos_sdk_path()
+        if sdk:
+            link_cmd[1:1] = ["-isysroot", sdk]
         proc = subprocess.run(link_cmd, capture_output=True, text=True)
         if proc.returncode != 0:
             raise RuntimeError(

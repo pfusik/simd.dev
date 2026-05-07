@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from scribe import (  # noqa: E402
     DB_PATH,
     HINTS_PATH,
+    _check_clang_version,
     _load_hints,
     build_inputs,
     compile_and_extract,
@@ -135,12 +136,18 @@ def main() -> int:
                     help="ignore the existing cache shard; recompute everything")
     args = ap.parse_args()
 
-    # Fail fast on a malformed hints.json so we don't fan it out across
-    # thousands of worker subprocesses each hitting the same parse error.
+    # Fail fast on a malformed hints.json or stale toolchain so we don't
+    # fan it out across thousands of worker subprocesses each hitting the
+    # same error.
     try:
         _load_hints()
     except json.JSONDecodeError as e:
         print(f"hints: {HINTS_PATH} is not valid JSON: {e}", file=sys.stderr)
+        return 2
+    try:
+        _check_clang_version()
+    except RuntimeError as e:
+        print(str(e), file=sys.stderr)
         return 2
 
     fams = set(args.family) if args.family else None
