@@ -250,7 +250,28 @@ SCALAR_TYPES: dict[str, TypeInfo] = {
     "long long": TypeInfo("int", 64, 1),
     "__int64":  TypeInfo("int", 64, 1),
     "__int32":  TypeInfo("int", 32, 1),
+    # AVX-512 bitmask scalars: 1 bit per lane, N lanes wide. Stored as
+    # a 1/2/4/8-byte little-endian unsigned integer. We decode them into
+    # a per-bit value list so the worked-example UI can render each lane
+    # as 0 or 1 with the existing lane-cell renderer.
+    "__mmask8":  TypeInfo("mask", 1,  8),
+    "__mmask16": TypeInfo("mask", 1, 16),
+    "__mmask32": TypeInfo("mask", 1, 32),
+    "__mmask64": TypeInfo("mask", 1, 64),
 }
+
+_INTEL_MASK_WIDTHS = {
+    "__mmask8": 8, "__mmask16": 16, "__mmask32": 32, "__mmask64": 64,
+}
+
+
+def _mask_synth_bits(role: str, bits: int) -> list[int]:
+    """Default mask pattern: alternating-ish bits truncated to `bits`.
+    Different roles get distinct patterns so kmask ops (kand/kxor/...)
+    show non-trivial results in the worked example."""
+    pattern = 0xA5A5A5A5A5A5A5A5 if role == "a" else 0x5A5A5A5A5A5A5A5A
+    val = pattern & ((1 << bits) - 1)
+    return [(val >> i) & 1 for i in range(bits)]
 
 
 # --------------------------------------------------------------------------
@@ -286,7 +307,10 @@ INTEL_VEC_BYTES: dict[str, int] = {
 
 
 def is_intel_intrinsic(name: str) -> bool:
-    return bool(re.match(r"^_(?:mm|tile)\w*$", name))
+    # `_mm*` covers SSE/AVX, `_tile*` is AMX, `_k*` is the AVX-512 kmask
+    # algebra (_kand_mask16, _kxor_mask32, _kunpackb, ...). The `_k`
+    # prefix doesn't collide with any arm-acle intrinsic.
+    return bool(re.match(r"^_(?:mm|tile|k)\w*$", name))
 
 
 # `_mm_<op>_<suffix>` -> lane info derived from the suffix.
@@ -317,12 +341,15 @@ def intel_lane_info_for(
             return ms[-1] if ms else None
         return re.search(pattern, intrinsic_name)
 
-    m = _pick(r"_e?p[iu](8|16|32|64)\b")
+    # `_e?p[iu]NN` followed by either end-of-string or another `_` token
+    # (e.g. `_mask`, `_mask3`, `_round`, ...). `\b` doesn't work here:
+    # between `2` and `_` both sides are word chars, no boundary.
+    m = _pick(r"_e?p[iu](8|16|32|64)(?=_|$)")
     if m:
         bits = int(m.group(1))
         kind = "uint" if "u" in m.group(0) else "int"
         return TypeInfo(kind, bits, bytes_total * 8 // bits)
-    m = _pick(r"_si(\d+)\b")
+    m = _pick(r"_si(\d+)(?=_|$)")
     if m:
         return TypeInfo("uint", 8, bytes_total)
     if re.search(r"_(?:ps|ss)\b", intrinsic_name):
@@ -440,17 +467,37 @@ INTEL_FAMILY_FLAGS: dict[str, list[str]] = {
     "SSE4.2":    ["-msse4.2"],
     "AVX":       ["-mavx"],
     "AVX2":      ["-mavx2"],
-    "AVX-512":   ["-mavx512f"],
-    "AVX-512/F": ["-mavx512f"],
-    "AVX-512/CD": ["-mavx512f", "-mavx512cd"],
-    "AVX-512/BW": ["-mavx512f", "-mavx512bw"],
-    "AVX-512/DQ": ["-mavx512f", "-mavx512dq"],
-    "AVX-512/VL": ["-mavx512f", "-mavx512vl"],
     "FMA":       ["-mfma"],
     "BMI1":      ["-mbmi"],
     "BMI2":      ["-mbmi2"],
     "AES":       ["-maes"],
     "PCLMULQDQ": ["-mpclmul"],
+    "GFNI":      ["-mgfni"],
+    "VAES":      ["-mvaes"],
+    "VPCLMULQDQ":["-mvpclmulqdq"],
+    # AVX-512 base + extensions. The iguide tags families as `AVX512F`,
+    # `AVX512BW`, etc. (no dash/slash); each AVX-512 ext implicitly needs
+    # `-mavx512f` first or clang refuses the builtins.
+    "AVX512F":   ["-mavx512f"],
+    "AVX512CD":  ["-mavx512f", "-mavx512cd"],
+    "AVX512BW":  ["-mavx512f", "-mavx512bw"],
+    "AVX512DQ":  ["-mavx512f", "-mavx512dq"],
+    "AVX512VL":  ["-mavx512f", "-mavx512vl"],
+    "AVX512_FP16":          ["-mavx512f", "-mavx512fp16"],
+    "AVX512_BF16":          ["-mavx512f", "-mavx512bf16"],
+    "AVX512_VBMI":          ["-mavx512f", "-mavx512vbmi"],
+    "AVX512_VBMI2":         ["-mavx512f", "-mavx512vbmi2"],
+    "AVX512_VNNI":          ["-mavx512f", "-mavx512vnni"],
+    "AVX512_BITALG":        ["-mavx512f", "-mavx512bitalg"],
+    "AVX512VPOPCNTDQ":      ["-mavx512f", "-mavx512vpopcntdq"],
+    "AVX512IFMA52":         ["-mavx512f", "-mavx512ifma"],
+    "AVX512_VP2INTERSECT":  ["-mavx512f", "-mavx512vp2intersect"],
+    # AVX-VNNI / AVX-IFMA / etc. (post-AVX2, pre-AVX-512 extensions).
+    "AVX_VNNI":             ["-mavxvnni"],
+    "AVX_VNNI_INT8":        ["-mavxvnniint8"],
+    "AVX_VNNI_INT16":       ["-mavxvnniint16"],
+    "AVX_IFMA":             ["-mavxifma"],
+    "AVX_NE_CONVERT":       ["-mavxneconvert"],
 }
 
 
@@ -719,6 +766,18 @@ def _build_inputs_intel(sig: "Signature") -> list[list]:
     out: list[list] = []
     for i, p in enumerate(sig.params):
         role = "a" if i == 0 else "b"
+        # AVX-512 mask params (__mmask8/16/32/64) -- synthesize an
+        # alternating bit pattern so masked variants visibly differ from
+        # their unmasked counterparts in the worked example.
+        if p.type_name in _INTEL_MASK_WIDTHS:
+            bits = _INTEL_MASK_WIDTHS[p.type_name]
+            if p.name in hints:
+                hv = hints[p.name]
+                val = int(hv[0] if isinstance(hv, list) else hv)
+                out.append([(val >> j) & 1 for j in range(bits)])
+            else:
+                out.append(_mask_synth_bits(role, bits))
+            continue
         # In the Intel intrinsic guide, ANY non-vector int param is an
         # immediate (mask, lane index, rounding mode, ...). 0 is a safe
         # default for all of them.
@@ -1003,6 +1062,16 @@ def _emit_source_intel(sig: Signature, inputs: list[list]) -> str:
     decls: list[str] = []
     arg_names: list[str] = []
     for i, (p, vals) in enumerate(zip(sig.params, inputs)):
+        if p.type_name in _INTEL_MASK_WIDTHS:
+            bits = _INTEL_MASK_WIDTHS[p.type_name]
+            if len(vals) != bits:
+                raise ValueError(
+                    f"param {p.name}: expected {bits} mask bits, got {len(vals)}"
+                )
+            val = sum((int(b) & 1) << j for j, b in enumerate(vals))
+            decls.append(f"const {p.type_name} {p.name} = {hex(val)};")
+            arg_names.append(p.name)
+            continue
         if p.type_name in _INTEL_IMM_TYPES:
             arg_names.append(str(vals[0]))
             continue
@@ -1288,6 +1357,12 @@ def decode_lanes(type_or_info, raw: bytes):
     if len(raw) < total:
         raise ValueError(f"got {len(raw)} bytes for {type_name}, need {total}")
     raw = raw[:total]
+    # AVX-512 masks: pack 1 bit per lane in a 1/2/4/8-byte LE integer,
+    # so the per-lane loop below (which assumes >=1 byte per lane) doesn't
+    # apply -- unpack bits directly.
+    if ti.kind == "mask":
+        val = int.from_bytes(raw, byteorder="little", signed=False)
+        return [(val >> i) & 1 for i in range(ti.count)]
     # For tuple types (int8x16x2_t etc.) we just decode `count * tuple_size`
     # lanes back-to-back in memory order. Callers can split into sub-vectors
     # afterwards if they want to display them stacked.

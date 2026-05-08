@@ -685,6 +685,10 @@
         if (m) return { bits: 16, kind: 'bfloat' };
         m = typeName.match(/^(?:m?float)(8|16|32|64)(?:x\d+)*_t$/);
         if (m) return { bits: +m[1], kind: 'float' };
+        // AVX-512 mask scalars: 1 bit per lane. The cached `values` field
+        // is already pre-unfolded into 0/1 entries, so per-lane `bits = 1`
+        // matches that shape and the lane renderer prints "0"/"1".
+        if (/^__mmask(8|16|32|64)$/.test(typeName)) return { bits: 1, kind: 'mask' };
         return { bits: null, kind: null };
     }
     function tupleCount(typeName) {
@@ -1303,8 +1307,12 @@
         }
         {
             const { bits, kind } = laneInfoFor(out.type, intrinsicName, 'output');
+            // Mask outputs: per-lane is one bit, so the byte-slice path
+            // (lb = bits/8 = 0.125) doesn't apply -- the value is already
+            // 0/1 and that's what we want to render.
+            const useByteSlice = out.bytes_hex && bits && kind !== 'mask';
             const hexes = outVals.map((v, i) =>
-                out.bytes_hex && bits ? hexFromBytes(out.bytes_hex, i, bits) : hexFromValue(v, bits, kind)
+                useByteSlice ? hexFromBytes(out.bytes_hex, i, bits) : hexFromValue(v, bits, kind)
             );
             rows.push({
                 label: '→', values: outVals, hexes,
