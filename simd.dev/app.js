@@ -875,10 +875,19 @@
               '    return 0;\n' +
               '}\n'
             : '';
+        // Several ARM intrinsics (e.g. vshrn_n_u16, vqshrn_n_*) expand to
+        // GCC statement-expressions in arm_neon.h, which the C++ standard
+        // forbids at file scope. Wrap the call in an immediately-invoked
+        // lambda so the expression evaluates at function scope, where
+        // statement-exprs are legal. The clang IR folder still computes
+        // RESULT at compile time, so this stays on the fold path.
+        const bodyDecls = decls.length ? '    ' + decls.join('\n    ') + '\n' : '';
         return (
             includes + '\n' + stdioHeaders + intelTypedefs + '\n' +
-            decls.join('\n') + '\n\n' +
-            `extern "C" const ${retType} RESULT = ${rec.name}(${argList});\n` +
+            `extern "C" const ${retType} RESULT = []() -> ${retType} {\n` +
+            bodyDecls +
+            `    return ${rec.name}(${argList});\n` +
+            `}();\n` +
             mainFn
         );
     }
