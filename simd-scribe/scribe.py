@@ -1340,12 +1340,27 @@ def _bf16_bytes_to_float(raw: bytes) -> float:
     return struct.unpack("<f", b"\x00\x00" + raw)[0]
 
 
+def _safe_float(f: float):
+    """JSON has no syntax for non-finite floats; Python's `json.dumps`
+    emits the bare tokens `Infinity`/`-Infinity`/`NaN`, which strict
+    parsers (every browser's `JSON.parse`) reject. Convert to strings
+    here so cached lane lists stay JSON-spec-clean. The front-end
+    already renders strings in lane cells, so this is no extra work."""
+    import math
+    if math.isnan(f):
+        return "NaN"
+    if math.isinf(f):
+        return "Infinity" if f > 0 else "-Infinity"
+    return f
+
+
 def decode_lanes(type_or_info, raw: bytes):
     """Reverse of an init list: turn raw little-endian bytes into lane values.
 
     Accepts either a type name (`"int8x16_t"`) or a `TypeInfo` directly
     (for synthesized buffer types from store harnesses). Returns ints for
-    int/uint/poly lanes and floats for float/bfloat lanes.
+    int/uint/poly lanes and floats (or "Infinity"/"-Infinity"/"NaN"
+    strings for non-finite values) for float/bfloat lanes.
     """
     if isinstance(type_or_info, TypeInfo):
         ti = type_or_info
@@ -1377,15 +1392,15 @@ def decode_lanes(type_or_info, raw: bytes):
             out.append(int.from_bytes(chunk, byteorder="little", signed=signed))
         elif ti.kind == "float":
             if ti.bits == 16:
-                out.append(struct.unpack("<e", chunk)[0])
+                out.append(_safe_float(struct.unpack("<e", chunk)[0]))
             elif ti.bits == 32:
-                out.append(struct.unpack("<f", chunk)[0])
+                out.append(_safe_float(struct.unpack("<f", chunk)[0]))
             elif ti.bits == 64:
-                out.append(struct.unpack("<d", chunk)[0])
+                out.append(_safe_float(struct.unpack("<d", chunk)[0]))
             else:
                 raise ValueError(f"unsupported float width {ti.bits}")
         elif ti.kind == "bfloat":
-            out.append(_bf16_bytes_to_float(chunk))
+            out.append(_safe_float(_bf16_bytes_to_float(chunk)))
         else:
             raise ValueError(f"unhandled kind {ti.kind!r}")
     return out
