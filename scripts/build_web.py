@@ -30,6 +30,15 @@ OVERRIDES = ROOT / "data" / "overrides.json"
 DIST = ROOT / "simd-tooltip" / "dist"
 
 
+# Vector C type tokens used by Intel intrinsics: __m64, __m128, __m128d,
+# __m128i, __m256, __m256d, __m256i, __m512, __m512d, __m512i, __m128h,
+# __m256h, __m512h, __m128bh, __m256bh, __m512bh, plus the AMX __tile1024i.
+# Used to classify scalar-vs-SIMD intel intrinsics from their signature.
+_INTEL_VEC_TYPE_RE = re.compile(
+    r"\b(?:__m(?:64|128|256|512)[dihbf]?h?|__tile\w*)\b"
+)
+
+
 def load_overrides() -> tuple[dict, dict]:
     """Read data/overrides.json. Returns (by_name, by_pseudocode_hash).
 
@@ -84,14 +93,17 @@ _INTEL_SUFFIX_DESC = {
 }
 
 
-def _intel_family(bits: int, suffix: str | None) -> str:
-    if suffix == "h":  return "AVX-512 FP16"
-    if suffix == "bh": return "AVX-512 BF16"
-    if bits == 64:  return "MMX"
-    if bits == 128: return "SSE / SSE2"
-    if bits == 256: return "AVX / AVX2"
-    if bits == 512: return "AVX-512"
-    return "?"
+def _intel_family(bits: int, suffix: str | None) -> list[str]:
+    """Return the list of family chip names a given Intel vector type
+    belongs to. Names match the iguide tags so clicking the chip on a
+    type record lands on real intrinsic results."""
+    if suffix == "h":  return ["AVX512_FP16"]
+    if suffix == "bh": return ["AVX512_BF16"]
+    if bits == 64:  return ["MMX"]
+    if bits == 128: return ["SSE", "SSE2"]
+    if bits == 256: return ["AVX", "AVX2"]
+    if bits == 512: return ["AVX512F"]
+    return []
 
 
 def classify_type(name: str) -> dict | None:
@@ -101,26 +113,26 @@ def classify_type(name: str) -> dict | None:
         bits = int(m.group(1)); suffix = m.group(2)
         elem, _ = _INTEL_SUFFIX_DESC[suffix]
         family = _intel_family(bits, suffix)
-        return _record_type(name, ["x86_64"], [family],
+        return _record_type(name, ["x86_64"], family,
             f"typedef {name};   // {bits}-bit {elem} vector",
-            f"{bits}-bit packed {elem} vector. Used by {family} intrinsics.")
+            f"{bits}-bit packed {elem} vector. Used by {' / '.join(family)} intrinsics.")
 
     m = _INTEL_MASK.match(name)
     if m:
         n = int(m.group(1))
-        return _record_type(name, ["x86_64"], ["AVX-512"],
+        return _record_type(name, ["x86_64"], ["AVX512F"],
             f"typedef {name};   // {n}-bit mask register",
             f"{n}-bit AVX-512 opmask (predicate). 1 bit per lane; selects which lanes "
             "an instruction writes back. Loaded/stored as an integer of the same width.")
 
     if _INTEL_AMX.match(name):
-        return _record_type(name, ["x86_64"], ["AMX"],
+        return _record_type(name, ["x86_64"], ["AMX-TILE"],
             f"typedef {name};   // 1024-byte AMX tile",
             "AMX tile (up to 16 rows × 64 bytes). Backs the matrix-extension "
             "intrinsics (_tile_loadd / _tile_dpbssd / _tile_stored / etc.).")
 
     if _INTEL_BF16.match(name):
-        return _record_type(name, ["x86_64"], ["AVX-512 BF16" if name == "__bf16" else "AVX-512 FP16"],
+        return _record_type(name, ["x86_64"], ["AVX512_BF16" if name == "__bf16" else "AVX512_FP16"],
             f"typedef {name};   // scalar half-width float",
             "Scalar half-width floating-point type (16-bit) used by the "
             "narrow-float Intel intrinsic surfaces.")
@@ -182,7 +194,7 @@ def classify_type(name: str) -> dict | None:
                 "SVE predicate (mask). One bit per byte of governed data; "
                 "selects active lanes for predicated instructions.")
         # svcount_t
-        return _record_type(name, ["aarch64"], ["SVE2.1", "SME"],
+        return _record_type(name, ["aarch64"], ["SVE2", "SME and SME2"],
             f"typedef {name};   // SVE2.1/SME multi-vector predicate",
             "SVE2.1/SME multi-vector predicate. Encodes loop state for "
             "predicate-pair / multi-vector intrinsics.")
@@ -385,7 +397,18 @@ def main():
                 description = ov["description"]
             if "pseudocode" in ov:
                 pseudocode = ov["pseudocode"]
-            by_canonical[name] = {
+            no_ce = bool(ov.get("no_ce"))
+            # Signature-based "scalar vs SIMD" classification. An
+            # intel-iguide intrinsic whose signature mentions no __m{8,16,
+            # ...} vector type is a scalar bit-bashing helper (POPCNT,
+            # LZCNT, BMI1/2, ADX, RDSEED, ...) -- not really SIMD. Tag it
+            # so the UI can render a "scalar" badge and so a future
+            # `kind:scalar` filter can hide them from default search.
+            defn = r.get("definition", "")
+            kind = None
+            if r["source"] == "intel-iguide" and not _INTEL_VEC_TYPE_RE.search(defn):
+                kind = "scalar"
+            rec = {
                 "name": name,
                 "arch": r["arch"],
                 "family": r["family"],
@@ -399,6 +422,11 @@ def main():
                 "source": r["source"],
                 "doc_url": doc_url(name, r["source"], r.get("acle_name")),
             }
+            if kind:
+                rec["kind"] = kind
+            if no_ce:
+                rec["no_ce"] = True
+            by_canonical[name] = rec
             ex = verifier_examples.get(name)
             if ex is not None:
                 by_canonical[name]["example"] = ex

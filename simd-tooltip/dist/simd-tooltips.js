@@ -810,6 +810,7 @@
   }
 
   function compilerExplorerUrl(rec) {
+    if (!rec || rec.no_ce) return null;
     const cfg = ceConfigFor(rec);
     if (!cfg) return null;
     const sig = ceParseSignature(rec.definition);

@@ -453,6 +453,9 @@
         $card.classList.toggle('is-type', rec.kind === 'type');
         history.replaceState(null, '', '#' + encodeURIComponent(name));
         $card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        if (window.SimdTooltips && window.SimdTooltips.scan) {
+            window.SimdTooltips.scan($card);
+        }
     }
 
     // opts:
@@ -465,6 +468,7 @@
 
         const tags = [];
         if (rec.kind === 'type') tags.push(`<span class="tag kind">type</span>`);
+        if (rec.kind === 'scalar') tags.push(`<span class="tag kind" title="Scalar bit-manipulation, not SIMD">scalar</span>`);
         for (const f of rec.family || []) {
             const filterValue = f.toLowerCase();
             tags.push(`<button type="button" class="tag tag-filter" data-field="family" data-value="${escapeAttr(filterValue)}" title="filter family:${escapeAttr(filterValue)}">${escapeHtml(f)}</button>`);
@@ -594,6 +598,12 @@
         }
         document.title = name + ' · simd.dev';
         window.scrollTo({ top: 0 });
+        // The tooltip lib walks + wraps intrinsic names at init; content
+        // we just inserted into the page card hasn't been scanned. Re-scan
+        // so hovers fire on the pseudocode + variants list.
+        if (window.SimdTooltips && window.SimdTooltips.scan) {
+            window.SimdTooltips.scan($card);
+        }
     }
 
     function exitIntrinsicPage(opts = {}) {
