@@ -72,7 +72,7 @@
         // (click or tab) so the user can immediately overwrite. Defer
         // with rAF so we run *after* the browser places the caret.
         $card.addEventListener('focusin', (ev) => {
-            const cell = ev.target.closest('.ex-dec[contenteditable], .ex-hexcell[contenteditable]');
+            const cell = ev.target.closest('.ex-cell[contenteditable]');
             if (!cell) return;
             requestAnimationFrame(() => {
                 if (document.activeElement !== cell) return;
@@ -90,7 +90,7 @@
         // the dec and hex spellings stay in sync regardless of which
         // base is currently visible.
         $card.addEventListener('input', (ev) => {
-            const cell = ev.target.closest('.ex-dec[contenteditable], .ex-hexcell[contenteditable]');
+            const cell = ev.target.closest('.ex-cell[contenteditable]');
             if (!cell) return;
             const wrap = cell.closest('.ex-wrap');
             if (wrap) wrap.classList.add('is-stale');
@@ -1701,6 +1701,10 @@
                     // Inputs become contenteditable on the live-edit
                     // page -- BOTH the dec and hex spellings, so the
                     // user can edit in whichever base is showing.
+                    // `.ex-cell` is the shared style hook (outline,
+                    // padding, focus ring); `.ex-dec` / `.ex-hexcell`
+                    // are the per-base hooks for visibility toggle and
+                    // mirror-on-edit detection.
                     const editable = _renderExampleViewable && !row.isOut
                         ? ` contenteditable="true" spellcheck="false"`
                         : '';
@@ -1713,8 +1717,8 @@
                         ? ' ex-changed' : '';
                     cells.push(
                         `<span class="${cls}${changed}"${dataAttrs}>` +
-                        `<span class="ex-dec"${editable}>${escapeHtml(dec)}</span>` +
-                        `<span class="ex-hexcell"${editable}>${escapeHtml(hex)}</span>` +
+                        `<span class="ex-cell ex-dec"${editable}>${escapeHtml(dec)}</span>` +
+                        `<span class="ex-cell ex-hexcell"${editable}>${escapeHtml(hex)}</span>` +
                         `<span class="ex-pad"> </span>` +
                         `</span>`
                     );

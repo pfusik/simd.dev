@@ -458,9 +458,13 @@ button.tag-filter:hover, button.tag-filter:focus-visible {
     from { background: #ffe18a; }
     to   { background: transparent; }
 }
+/* Per-base visibility: dec is shown by default, hex hidden until the
+   .ex container picks up the `hex` class via the dec/hex toggle. */
 .ex-hexcell { display: none; }
 .ex.hex .ex-dec { display: none; }
 .ex.hex .ex-hexcell { display: inline; }
+/* Both bases share styling via `.ex-cell` so they look identical
+   regardless of which one is currently visible. */
 .ex-modes {
     position: absolute;
     top: 6px;
@@ -482,14 +486,17 @@ button.tag-filter:hover, button.tag-filter:focus-visible {
 .ex-mode.is-active { color: var(--fg); font-weight: 700; }
 .ex-mode:focus-visible { outline: none; }
 
-/* Live-edit affordances (only on /?intrinsic for fold-eligible records) */
-.ex-dec[contenteditable="true"] {
+/* Live-edit affordances (only on /?intrinsic for fold-eligible
+   records). Hooked off the shared `.ex-cell` class so dec and hex get
+   the same dashed outline / padding / focus ring -- swapping bases via
+   the toggle stays visually stable. */
+.ex-cell[contenteditable="true"] {
     outline: 1px dashed var(--border);
     border-radius: 2px;
     padding: 0 2px;
     cursor: text;
 }
-.ex-dec[contenteditable="true"]:focus {
+.ex-cell[contenteditable="true"]:focus {
     outline-color: var(--accent);
     outline-style: solid;
     background: var(--accent-soft);
@@ -555,8 +562,7 @@ button.tag-filter:hover, button.tag-filter:focus-visible {
 /* Output row goes gray once an input is edited, until the next run
    completes successfully (which re-renders the .ex-wrap fresh). */
 .ex-wrap.is-stale .ex-val.ex-out,
-.ex-wrap.is-stale .ex-val.ex-out .ex-dec,
-.ex-wrap.is-stale .ex-val.ex-out .ex-hexcell {
+.ex-wrap.is-stale .ex-val.ex-out .ex-cell {
     color: var(--muted);
     font-weight: 400;
 }
