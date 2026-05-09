@@ -1,0 +1,21 @@
+{
+  "_comment": "Per-intrinsic data overrides. Use sparingly: only when upstream is wrong or unrendered. Two scopes: by_name overrides a single intrinsic; by_pseudocode_hash overrides every intrinsic in a cluster. Recognized fields: description, pseudocode.",
+
+  "by_name": {
+    "_rdseed64_step": {
+      "description": "Stores a hardware-generated 64-bit random value at *val. Returns 1 on success, 0 if the hardware RNG had no data ready."
+    },
+    "_rdseed32_step": {
+      "description": "Stores a hardware-generated 32-bit random value at *val. Returns 1 on success, 0 if the hardware RNG had no data ready."
+    },
+    "_rdseed16_step": {
+      "description": "Stores a hardware-generated 16-bit random value at *val. Returns 1 on success, 0 if the hardware RNG had no data ready."
+    }
+  },
+
+  "by_pseudocode_hash": {
+    "2fac8b14e711": {
+      "pseudocode": "Return a vector in which each element i contains:\n    (op3 & op1[i]) | (~op3 & ~op2[i])\n\nThat is, op3 selects between bits of op1[i] (where op3 has 1 bits)\nand bits of ~op2[i] (where op3 has 0 bits)."
+    }
+  }
+}

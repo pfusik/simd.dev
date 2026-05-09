@@ -286,11 +286,16 @@
     function parseQuery(s) {
         const filters = [];
         const terms = [];
-        const tokens = (s || '').match(/\S+/g) || [];
+        // Tokens are whitespace-separated, but `arch:"value with spaces"`
+        // and `family:"value with spaces"` keep their value as one token.
+        const tokens = (s || '').match(
+            /(?:arch|family|kind):"[^"]*"|\S+/gi
+        ) || [];
         for (const t of tokens) {
-            const m = t.match(/^(arch|family):(.+)$/i);
+            const m = t.match(/^(arch|family|kind):(?:"([^"]*)"|(.+))$/i);
             if (m) {
-                filters.push({ key: m[1].toLowerCase(), value: m[2].toLowerCase() });
+                const value = (m[2] !== undefined ? m[2] : m[3]).toLowerCase();
+                filters.push({ key: m[1].toLowerCase(), value });
             } else {
                 terms.push(t.toLowerCase());
             }
@@ -298,9 +303,13 @@
         return { filters, terms };
     }
 
+    function quoteIfNeeded(v) {
+        return /\s/.test(v) ? `"${v}"` : v;
+    }
+
     function unparseQuery(q) {
         const parts = [];
-        for (const f of q.filters) parts.push(f.key + ':' + f.value);
+        for (const f of q.filters) parts.push(f.key + ':' + quoteIfNeeded(f.value));
         for (const t of q.terms) parts.push(t);
         return parts.join(' ');
     }
@@ -325,9 +334,17 @@
     function passesFilters(name, filters) {
         if (filters.length === 0) return true;
         const meta = recordMetaFor(name);
+        const rec = records[name];
         for (const f of filters) {
-            const list = f.key === 'arch' ? meta.archs : meta.families;
             const v = f.value;
+            if (f.key === 'kind') {
+                // Today the only meaningful kind is "type" (the 208 SIMD
+                // type records). Everything else is an intrinsic.
+                const k = (rec && rec.kind) ? rec.kind : 'intrinsic';
+                if (k !== v) return false;
+                continue;
+            }
+            const list = f.key === 'arch' ? meta.archs : meta.families;
             if (!list.some(x => x.toLowerCase().indexOf(v) >= 0)) return false;
         }
         return true;
@@ -449,7 +466,7 @@
         const tags = [];
         if (rec.kind === 'type') tags.push(`<span class="tag kind">type</span>`);
         for (const f of rec.family || []) {
-            const filterValue = (f === 'SME and SME2' ? 'SME' : f).toLowerCase();
+            const filterValue = f.toLowerCase();
             tags.push(`<button type="button" class="tag tag-filter" data-field="family" data-value="${escapeAttr(filterValue)}" title="filter family:${escapeAttr(filterValue)}">${escapeHtml(f)}</button>`);
         }
         for (const a of rec.arch || []) {
@@ -467,6 +484,9 @@
         if (rec.example) {
             sections.push({ id: 'ex', label: 'example',
                 body: renderExample(rec.example, name) });
+        } else if (rec.kind !== 'type') {
+            sections.push({ id: 'ex', label: 'example',
+                body: renderNoExample(name, rec) });
         }
         if (rec.cluster && clusters && clusters[rec.cluster]) {
             const siblings = clusters[rec.cluster].filter(n => n !== name);
@@ -605,7 +625,7 @@
         const famEntries  = sortByCount(famCount);
 
         $archChips.innerHTML = archEntries.map(([name, count]) => chipHtml('arch', name, count)).join('');
-        $famChips.innerHTML  = famEntries.map(([name, count])  => chipHtml('family', name, count, name === 'SME and SME2' ? 'SME' : null)).join('');
+        $famChips.innerHTML  = famEntries.map(([name, count])  => chipHtml('family', name, count)).join('');
 
         $archChips.addEventListener('click', onChipClick);
         $famChips.addEventListener('click', onChipClick);
@@ -623,7 +643,7 @@
 
     function chipHtml(field, label, count, filterValueOverride) {
         const value = filterValueOverride || label;
-        return `<button type="button" class="chip" data-field="${field}" data-value="${escapeAttr(value.toLowerCase())}" title="${escapeAttr(field + ':' + value)}">${escapeHtml(label)}<span class="chip-count">${count.toLocaleString()}</span></button>`;
+        return `<button type="button" class="chip" data-field="${field}" data-value="${escapeAttr(value.toLowerCase())}" title="${escapeAttr(field + ':' + value)}">${escapeHtml(label)} <span class="chip-count">(${count.toLocaleString()})</span></button>`;
     }
 
     function onChipClick(ev) {
@@ -640,7 +660,7 @@
         // Any other content the user had typed gets wiped.
         const q = parseQuery($q.value);
         const isActive = q.filters.some(f => f.key === field && f.value === value);
-        $q.value = isActive ? '' : (field + ':' + value);
+        $q.value = isActive ? '' : (field + ':' + quoteIfNeeded(value));
         $card.hidden = true;
         renderResults($q.value);
         refreshChipState();
@@ -1244,6 +1264,64 @@
         return laneInfo(typeName);
     }
 
+    // Reasons we don't have a worked example for a given intrinsic.
+    // Order matters -- we return the first match.
+    const NO_EXAMPLE_REASONS = [
+        // ARM scalable / streaming families: harness doesn't model
+        // svbool_t, svintN_t, mve_pred16_t etc. yet.
+        { match: r => (r.family || []).some(f =>
+            f === 'SVE' || f === 'SVE2' || f === 'SME and SME2' || f === 'Helium'),
+          reason: 'Scalable / predicated vector intrinsics ('
+              + 'SVE / SVE2 / SME / Helium MVE) — the verifier doesn\'t '
+              + 'model the runtime-length vector and predicate types yet. '
+              + 'Tracking this as a v1 follow-up.' },
+        // Intel SVML transcendentals: clang doesn\'t ship them, only
+        // Intel\'s compiler does.
+        { match: (r, n) => /^_(?:mm|mm256|mm512)_(?:acos|asin|atan|atan2|cos|sin|sincos|tan|cosh|sinh|tanh|acosh|asinh|atanh|cbrt|cdf|cdfinv|erf|erfc|erfinv|exp|exp10|exp2|expm1|hypot|invcbrt|invsqrt|log|log10|log2|log1p|logb|pow|svml|trunc)/.test(n),
+          reason: 'Intel SVML transcendental — clang doesn\'t ship a '
+              + 'declaration for this; it lives in Intel\'s closed-source '
+              + 'libsvml. We\'d need to either link against libsvml or '
+              + 'declare a stub.' },
+        // Tile / AMX intrinsics need a special tile config + load/store
+        // ceremony we don\'t emit.
+        { match: (r, n) => /^_?_tile_/.test(n),
+          reason: 'AMX tile intrinsic — needs an explicit `_tile_loadconfig` '
+              + 'set-up that the harness doesn\'t emit.' },
+        // SM3/SM4 require Apple-Silicon-absent hardware to execute, and
+        // clang\'s IR folder doesn\'t model them.
+        { match: (r, n) => /^v(?:sm3|sm4)/.test(n),
+          reason: 'SM3 / SM4 cryptography — Apple Silicon doesn\'t ship '
+              + 'this hardware, so the execute fallback SIGILLs. Would '
+              + 'need an aarch64 emulator.' },
+        // Scalar Intel ops (popcnt, bextr, lzcnt, tzcnt, ...): not really
+        // SIMD, the harness skips them.
+        { match: (r, n) => /^_(?:popcnt|lzcnt|tzcnt|bextr|blsi|blsr|blsmsk|pext|pdep|bzhi|andn|mulx)/.test(n),
+          reason: 'Scalar bit-manipulation intrinsic, not SIMD. '
+              + 'The verifier focuses on vector ops.' },
+        // AES / SHA / CLMUL: usually need byte-shuffled inputs to
+        // produce non-trivial output; default test vectors are boring.
+        { match: (r, n) => /aes|sha\d|sm3|clmul|crc32/i.test(n),
+          reason: 'Crypto / hashing intrinsic — needs hand-picked input '
+              + 'vectors to produce a meaningful worked example. Open a '
+              + 'feature request with a suggested input pair.' },
+    ];
+
+    function renderNoExample(name, rec) {
+        for (const { match, reason } of NO_EXAMPLE_REASONS) {
+            try {
+                if (match(rec, name)) {
+                    return `<div class="ex-empty">No worked example. <em>${escapeHtml(reason)}</em></div>`;
+                }
+            } catch (_) { /* fall through */ }
+        }
+        return (
+            `<div class="ex-empty">No worked example yet. `
+            + `<a href="https://github.com/MarcinZukowski/simd.dev/issues/new"`
+            + ` target="_blank" rel="noopener">Open an issue</a> with a `
+            + `suggested input vector and we\'ll add one.</div>`
+        );
+    }
+
     // `highlight` (optional): { changedOutputLanes: Set<number> } -- cells
     // in the output row whose values changed since the last render get
     // an `.ex-changed` class. Used right after a successful "run on CE".
@@ -1377,7 +1455,7 @@
             `<button type="button" class="ex-mode" data-mode="hex" aria-pressed="false">hex</button>` +
             `</div>`;
         const runBtn = _renderExampleRunnable
-            ? `<button type="button" class="ex-run" title="Re-compile on Compiler Explorer">↻ run on CE</button>`
+            ? `<button type="button" class="ex-run" title="Re-compile on Compiler Explorer">↻ update (via CE)</button>`
             : '';
         const seeBtn = _renderExampleViewable
             ? `<button type="button" class="ex-see" title="Open the harness in Compiler Explorer">↗ see on CE</button>`
@@ -1387,7 +1465,7 @@
             : '';
         const hint = _renderExampleViewable
             ? (_renderExampleRunnable
-                ? `<div class="ex-hint"><em>input values are editable</em> — change a number and click <strong>↻ run on CE</strong> to recompile (or <strong>↗ see on CE</strong> to inspect the harness).</div>`
+                ? `<div class="ex-hint"><em>input values are editable</em> — change a number and click <strong>↻ update (via CE)</strong> to recompile (or <strong>↗ see on CE</strong> to inspect the harness).</div>`
                 : `<div class="ex-hint"><em>input values are editable</em> — click <strong>↗ see on CE</strong> to inspect / recompile the harness.</div>`)
             : '';
         // Wrap so updateOutputRow can replace the entire example block

@@ -532,6 +532,17 @@ button.tag-filter:hover, button.tag-filter:focus-visible {
 }
 .ex-hint em { font-style: italic; }
 .ex-hint strong { color: var(--fg); font-weight: 600; }
+.ex-empty {
+    font-size: 0.9em;
+    color: var(--muted);
+    background: var(--accent-soft);
+    border-left: 3px solid var(--accent);
+    padding: 8px 12px;
+    border-radius: 3px;
+    line-height: 1.4;
+}
+.ex-empty em { color: var(--fg); font-style: normal; }
+.ex-empty a { color: var(--accent); }
 /* Output row goes gray once an input is edited, until the next run
    completes successfully (which re-renders the .ex-wrap fresh). */
 .ex-wrap.is-stale .ex-val.ex-out,

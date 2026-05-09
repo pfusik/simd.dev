@@ -26,7 +26,21 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "data" / "intrinsics.jsonl"
 VERIFIER_CACHE_DIR = ROOT / "data" / "verifier-cache"
+OVERRIDES = ROOT / "data" / "overrides.json"
 DIST = ROOT / "simd-tooltip" / "dist"
+
+
+def load_overrides() -> tuple[dict, dict]:
+    """Read data/overrides.json. Returns (by_name, by_pseudocode_hash).
+
+    Each value maps a record key (intrinsic name or pseudocode hash) to a
+    dict of fields to overwrite -- currently `description` and `pseudocode`.
+    Use sparingly, for cases where upstream is wrong or unhelpful.
+    """
+    if not OVERRIDES.exists():
+        return {}, {}
+    raw = json.loads(OVERRIDES.read_text())
+    return raw.get("by_name", {}) or {}, raw.get("by_pseudocode_hash", {}) or {}
 
 WEB_DESC_LIMIT = 220
 
@@ -342,6 +356,7 @@ def main():
     DIST.mkdir(parents=True, exist_ok=True)
 
     verifier_examples = load_verifier_examples()
+    overrides_by_name, overrides_by_hash = load_overrides()
 
     by_canonical: dict[str, dict] = {}
     alias_targets: dict[str, list[str]] = {}
@@ -357,17 +372,30 @@ def main():
                 existing["family"] = sorted(set(existing["family"]) | set(r["family"]))
                 existing["arch"] = sorted(set(existing["arch"]) | set(r["arch"]))
                 continue
+            pc_hash = r.get("pseudocode_hash") or ""
+            description = r.get("description", "")
+            pseudocode = r.get("pseudocode", "")
+            # Apply overrides: name-specific wins over hash-cluster wins
+            # over upstream. Two-tier so a single hash override fixes a
+            # whole cluster (e.g. svbsl2n_n_*) while still allowing a
+            # per-name override to disambiguate within that cluster.
+            ov = overrides_by_hash.get(pc_hash, {})
+            ov = {**ov, **overrides_by_name.get(name, {})}
+            if "description" in ov:
+                description = ov["description"]
+            if "pseudocode" in ov:
+                pseudocode = ov["pseudocode"]
             by_canonical[name] = {
                 "name": name,
                 "arch": r["arch"],
                 "family": r["family"],
                 "definition": r["definition"],
-                "description": shorten(r.get("description", "")),
-                "pseudocode": r.get("pseudocode", ""),
+                "description": shorten(description),
+                "pseudocode": pseudocode,
                 # Carry the cluster key through so we can build the variants
                 # map after all records are assembled. Stripped from the
                 # output records (replaced by a short cluster id).
-                "_pc_hash": r.get("pseudocode_hash") or "",
+                "_pc_hash": pc_hash,
                 "source": r["source"],
                 "doc_url": doc_url(name, r["source"], r.get("acle_name")),
             }
