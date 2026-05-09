@@ -757,7 +757,15 @@
     function isLiveRunnable(rec) {
         if (!isLiveViewable(rec)) return false;
         const v = rec.example.verified_via;
-        return v === 'fold' || v === 'execute';
+        // Intel `execute` records can re-run via CE's executor mode (CE
+        // ships an executor backend for x86). For ARM, CE's compilers
+        // are cross-compilers with no executor -- so `execute` records
+        // are doomed to silent .zero output via the fold path. Suppress
+        // the live-update button there; "see on CE" still works for
+        // inspection.
+        if (v === 'fold') return true;
+        if (v === 'execute' && isIntelIntrinsic(rec.name)) return true;
+        return false;
     }
 
     function laneLiteral(v, info) {
@@ -968,6 +976,19 @@
                 continue;
             }
             if ((m = t.match(/^\.zero\s+(\d+)/))) {
+                // A leading `.zero` directly under RESULT: means RESULT
+                // landed in BSS -- clang couldn't constant-fold the call.
+                // The bytes are runtime-zeroed, not actual results, so
+                // surface a clear error instead of returning all-zeros.
+                if (out.length === 0) {
+                    throw new Error(
+                        "constant-fold failed -- this intrinsic doesn't fold "
+                        + "at compile time on Compiler Explorer's clang. "
+                        + "The cached worked example was verified by linking "
+                        + "and running locally; CE's iframe can only show "
+                        + "static .rodata bytes."
+                    );
+                }
                 for (let k = 0; k < parseInt(m[1], 10); k++) out.push(0);
                 continue;
             }
