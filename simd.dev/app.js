@@ -72,7 +72,7 @@
         // (click or tab) so the user can immediately overwrite. Defer
         // with rAF so we run *after* the browser places the caret.
         $card.addEventListener('focusin', (ev) => {
-            const cell = ev.target.closest('.ex-dec[contenteditable]');
+            const cell = ev.target.closest('.ex-dec[contenteditable], .ex-hexcell[contenteditable]');
             if (!cell) return;
             requestAnimationFrame(() => {
                 if (document.activeElement !== cell) return;
@@ -84,10 +84,11 @@
             });
         });
 
-        // When a user edits an input cell, mark the output as stale
-        // (grayed out) until a fresh "run on CE" finishes.
+        // When a user edits an input cell (in either dec or hex), mark
+        // the output as stale (grayed out) until a fresh "run on CE"
+        // finishes.
         $card.addEventListener('input', (ev) => {
-            const cell = ev.target.closest('.ex-dec[contenteditable]');
+            const cell = ev.target.closest('.ex-dec[contenteditable], .ex-hexcell[contenteditable]');
             if (!cell) return;
             const wrap = cell.closest('.ex-wrap');
             if (wrap) wrap.classList.add('is-stale');
@@ -1114,28 +1115,121 @@
         return values;
     }
 
+    // Clamp an integer lane value to its representable range. Intel
+    // suffixes use the `epu` flag for unsigned vs `epi` for signed; for
+    // ARM the `kind` field already disambiguates.
+    function clampIntegerLane(v, bits, kind) {
+        if (kind === 'uint' || kind === 'poly' || kind === 'mask') {
+            const lo = 0n, hi = (1n << BigInt(bits)) - 1n;
+            const b = BigInt(v);
+            if (b < lo) return Number(lo);
+            if (b > hi) return Number(hi);
+            return v;
+        }
+        // signed
+        const lo = -(1n << BigInt(bits - 1));
+        const hi = (1n << BigInt(bits - 1)) - 1n;
+        const b = BigInt(v);
+        if (b < lo) return Number(lo);
+        if (b > hi) return Number(hi);
+        return v;
+    }
+
+    // Decode the hex-cell text back to a lane value. The hex spelling
+    // we render is little-endian byte-major (see hexFromBytes) for
+    // outputs, but for inputs it comes from hexFromValue which writes
+    // the integer in big-endian hex (no byte-reverse). We only need to
+    // support the input shape here, so big-endian hex of the value.
+    function parseHexLane(text, bits, kind) {
+        const t = text.replace(/^0x/i, '').replace(/\s+/g, '');
+        if (kind === 'float' || kind === 'bfloat') {
+            // Hex bytes laid out as IEEE binary; we just round-trip.
+            // 16-bit fp: padStart to 4; 32-bit: 8; 64-bit: 16.
+            const len = bits / 4;
+            if (!new RegExp(`^[0-9a-fA-F]{1,${len}}$`).test(t)) {
+                throw new Error('not hex: "' + text + '"');
+            }
+            const padded = t.padStart(len, '0');
+            const buf = new ArrayBuffer(bits / 8);
+            const u = new Uint8Array(buf);
+            for (let i = 0; i < bits / 8; i++) {
+                u[i] = parseInt(padded.slice((bits / 8 - 1 - i) * 2,
+                                             (bits / 8 - i) * 2), 16);
+            }
+            if (kind === 'bfloat') {
+                const u16 = new Uint16Array(buf)[0];
+                const f32buf = new ArrayBuffer(4);
+                new Uint32Array(f32buf)[0] = u16 << 16;
+                return new Float32Array(f32buf)[0];
+            }
+            if (bits === 16 && typeof Float16Array !== 'undefined') {
+                return new Float16Array(buf)[0];
+            }
+            if (bits === 32) return new Float32Array(buf)[0];
+            if (bits === 64) return new Float64Array(buf)[0];
+        }
+        if (!/^[0-9a-fA-F]+$/.test(t)) {
+            throw new Error('not hex: "' + text + '"');
+        }
+        // For signed types, treat the hex as the two\'s-complement bit
+        // pattern at this width: high bit = sign.
+        if (bits <= 32) {
+            const u = parseInt(t, 16) >>> 0;
+            const mask = bits === 32 ? 0xffffffff : ((1 << bits) - 1);
+            const masked = u & mask;
+            if (kind === 'int' && (masked >>> (bits - 1)) & 1) {
+                return masked - (1 << bits);
+            }
+            return masked;
+        }
+        let n = BigInt('0x' + t);
+        const w = BigInt(bits);
+        n = n & ((1n << w) - 1n);
+        if (kind === 'int' && (n >> (w - 1n))) n -= (1n << w);
+        return Number(n);
+    }
+
     // Pull the user's current input values out of the editable cells.
+    // Honors hex mode: if the .ex container has class "hex", read from
+    // the .ex-hexcell; otherwise read the decimal cell.
     function readLiveInputs(exNode, rec) {
         const inputs = rec.example.inputs;
         const out = inputs.map(inp =>
             new Array(Array.isArray(inp.values) ? inp.values.length : 1));
+        const isHexMode = exNode.classList.contains('hex');
         for (const cell of exNode.querySelectorAll('.ex-val[data-row][data-lane]')) {
             const ri = +cell.dataset.row, li = +cell.dataset.lane;
-            const dec = cell.querySelector('.ex-dec');
-            if (!dec) continue;
-            const text = dec.textContent.trim();
             const ti = laneInfo(inputs[ri].type);
+            const dec = cell.querySelector('.ex-dec');
+            const hex = cell.querySelector('.ex-hexcell');
+            if (!dec) continue;
             let v;
-            if (ti.kind === 'float' || ti.kind === 'bfloat') {
-                v = Number(text);
-                if (Number.isNaN(v)) throw new Error(
-                    inputs[ri].name + '[' + li + '] = "' + text + '" is not a number'
-                );
+            if (isHexMode && hex && hex.textContent.trim() !== '') {
+                try {
+                    v = parseHexLane(hex.textContent.trim(), ti.bits, ti.kind);
+                } catch (e) {
+                    throw new Error(
+                        inputs[ri].name + '[' + li + '] = "' + hex.textContent.trim() + '" is not valid hex');
+                }
             } else {
-                if (!/^[+-]?\d+$/.test(text)) throw new Error(
-                    inputs[ri].name + '[' + li + '] = "' + text + '" is not an integer'
-                );
-                v = parseInt(text, 10);
+                const text = dec.textContent.trim();
+                if (ti.kind === 'float' || ti.kind === 'bfloat') {
+                    v = Number(text);
+                    if (Number.isNaN(v) && text.toLowerCase() !== 'nan') throw new Error(
+                        inputs[ri].name + '[' + li + '] = "' + text + '" is not a number'
+                    );
+                } else {
+                    if (!/^[+-]?\d+$/.test(text)) throw new Error(
+                        inputs[ri].name + '[' + li + '] = "' + text + '" is not an integer'
+                    );
+                    v = parseInt(text, 10);
+                }
+            }
+            // Clamp to the lane's representable range so a stray big
+            // number doesn't silently wrap or get rejected by clang.
+            if (ti.bits && (ti.kind === 'int' || ti.kind === 'uint'
+                || ti.kind === 'poly' || ti.kind === 'mask')) {
+                v = clampIntegerLane(v, ti.bits, ti.kind);
             }
             out[ri][li] = v;
         }
@@ -1435,7 +1529,9 @@
                 if (i < row.values.length) {
                     const dec = String(row.values[i]);
                     const hex = row.hexes[i] || '';
-                    // Inputs become contenteditable on the live-edit page.
+                    // Inputs become contenteditable on the live-edit
+                    // page -- BOTH the dec and hex spellings, so the
+                    // user can edit in whichever base is showing.
                     const editable = _renderExampleViewable && !row.isOut
                         ? ` contenteditable="true" spellcheck="false"`
                         : '';
@@ -1449,7 +1545,7 @@
                     cells.push(
                         `<span class="${cls}${changed}"${dataAttrs}>` +
                         `<span class="ex-dec"${editable}>${escapeHtml(dec)}</span>` +
-                        `<span class="ex-hexcell">${escapeHtml(hex)}</span>` +
+                        `<span class="ex-hexcell"${editable}>${escapeHtml(hex)}</span>` +
                         `<span class="ex-pad"> </span>` +
                         `</span>`
                     );
