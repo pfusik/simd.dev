@@ -85,8 +85,10 @@
         });
 
         // When a user edits an input cell (in either dec or hex), mark
-        // the output as stale (grayed out) until a fresh "run on CE"
-        // finishes.
+        // the output as stale (grayed out) until a fresh "update (via
+        // CE)" finishes, AND mirror the value into the sibling cell so
+        // the dec and hex spellings stay in sync regardless of which
+        // base is currently visible.
         $card.addEventListener('input', (ev) => {
             const cell = ev.target.closest('.ex-dec[contenteditable], .ex-hexcell[contenteditable]');
             if (!cell) return;
@@ -94,9 +96,10 @@
             if (wrap) wrap.classList.add('is-stale');
             const status = wrap && wrap.querySelector('.ex-status');
             if (status) {
-                status.textContent = 'edited — click run to recompile';
+                status.textContent = 'edited — click update to recompile';
                 status.className = 'ex-status is-stale';
             }
+            mirrorEditedSibling(cell);
         });
 
         $card.addEventListener('click', (ev) => {
@@ -1189,6 +1192,98 @@
         return Number(n);
     }
 
+    // Find the rec for the example block currently shown -- either via
+    // the dedicated /?intrinsic page URL or the compact card hash.
+    function recForLiveExample() {
+        const params = new URLSearchParams(location.search);
+        const fromParam = params.get('intrinsic');
+        if (fromParam && records[fromParam]) return records[fromParam];
+        const fromHash = location.hash.length > 1
+            ? decodeURIComponent(location.hash.slice(1))
+            : null;
+        if (fromHash && records[fromHash]) return records[fromHash];
+        return null;
+    }
+
+    // Local re-implementation of the dec→hex round-trip from
+    // renderExample. Pulled out so the live-edit handler can call it
+    // without re-rendering the whole row.
+    function _hexFromValueLocal(v, bits, kind) {
+        if (bits == null) return String(v);
+        const len = bits / 4;
+        if (kind === 'float' || kind === 'bfloat') {
+            const f = Number(v);
+            if (kind === 'bfloat') {
+                const buf = new ArrayBuffer(4);
+                new Float32Array(buf)[0] = f;
+                const u = new Uint32Array(buf)[0];
+                return ((u >>> 16) & 0xffff).toString(16).padStart(4, '0');
+            }
+            if (bits === 32) {
+                const buf = new ArrayBuffer(4);
+                new Float32Array(buf)[0] = f;
+                return new Uint32Array(buf)[0].toString(16).padStart(8, '0');
+            }
+            if (bits === 64) {
+                const buf = new ArrayBuffer(8);
+                new Float64Array(buf)[0] = f;
+                return new BigUint64Array(buf)[0].toString(16).padStart(16, '0');
+            }
+            if (bits === 16 && typeof Float16Array !== 'undefined') {
+                const buf = new ArrayBuffer(2);
+                new Float16Array(buf)[0] = f;
+                return new Uint16Array(buf)[0].toString(16).padStart(4, '0');
+            }
+            return String(v);
+        }
+        if (bits <= 32) {
+            const mask = bits === 32 ? 0xffffffff : ((1 << bits) - 1);
+            const u = (Number(v) & mask) >>> 0;
+            return u.toString(16).padStart(Math.max(1, len), '0');
+        }
+        let n = typeof v === 'bigint' ? v : BigInt(v);
+        if (n < 0n) n = (1n << 64n) + n;
+        return n.toString(16).padStart(len, '0');
+    }
+
+    // After the user edits one of the two cells, derive the matching
+    // value in the other base and write it. Bails on partial input
+    // (e.g. "1-" mid-typing) so we don't overwrite with garbage.
+    function mirrorEditedSibling(cell) {
+        const valCell = cell.closest('.ex-val[data-row][data-lane]');
+        if (!valCell) return;
+        const rec = recForLiveExample();
+        if (!rec || !rec.example) return;
+        const ri = +valCell.dataset.row;
+        const inp = rec.example.inputs && rec.example.inputs[ri];
+        if (!inp) return;
+        const ti = laneInfoFor(inp.type, rec.name, 'input');
+        if (!ti || !ti.bits) return;
+        const dec = valCell.querySelector('.ex-dec');
+        const hex = valCell.querySelector('.ex-hexcell');
+        if (!dec || !hex) return;
+        const isDec = cell.classList.contains('ex-dec');
+        try {
+            if (isDec) {
+                const text = dec.textContent.trim();
+                let v;
+                if (ti.kind === 'float' || ti.kind === 'bfloat') {
+                    v = Number(text);
+                    if (Number.isNaN(v) && text.toLowerCase() !== 'nan') return;
+                } else {
+                    if (!/^[+-]?\d+$/.test(text)) return;
+                    v = parseInt(text, 10);
+                }
+                hex.textContent = _hexFromValueLocal(v, ti.bits, ti.kind);
+            } else {
+                const text = hex.textContent.trim();
+                if (!text) return;
+                const v = parseHexLane(text, ti.bits, ti.kind);
+                dec.textContent = String(v);
+            }
+        } catch (_) { /* mid-typing: leave the sibling alone */ }
+    }
+
     // Pull the user's current input values out of the editable cells.
     // Honors hex mode: if the .ex container has class "hex", read from
     // the .ex-hexcell; otherwise read the decimal cell.
@@ -1309,6 +1404,10 @@
         );
         rec.example = newExample;
         const wrap = exNode.closest('.ex-wrap');
+        // Carry the user's dec/hex preference across the re-render so
+        // updating doesn't snap them back to dec.
+        const wasHex = exNode.classList.contains('hex');
+        const parent = wrap ? wrap.parentNode : exNode.parentNode;
         _renderExampleViewable = isLiveViewable(rec);
         _renderExampleRunnable = isLiveRunnable(rec);
         try {
@@ -1318,6 +1417,18 @@
         } finally {
             _renderExampleViewable = false;
             _renderExampleRunnable = false;
+        }
+        if (wasHex && parent) {
+            const newEx = parent.querySelector('.ex-wrap .ex')
+                || parent.querySelector('.ex');
+            if (newEx) {
+                newEx.classList.add('hex');
+                for (const b of newEx.querySelectorAll('button.ex-mode')) {
+                    const active = b.dataset.mode === 'hex';
+                    b.classList.toggle('is-active', active);
+                    b.setAttribute('aria-pressed', active ? 'true' : 'false');
+                }
+            }
         }
     }
 
