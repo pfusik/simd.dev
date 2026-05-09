@@ -543,6 +543,15 @@ button.tag-filter:hover, button.tag-filter:focus-visible {
 }
 .ex-empty em { color: var(--fg); font-style: normal; }
 .ex-empty a { color: var(--accent); }
+
+.ex-norun {
+    margin-top: 8px;
+    font-size: 0.85em;
+    color: var(--muted);
+    line-height: 1.4;
+    max-width: 60ch;
+}
+.ex-norun strong { color: var(--fg); font-weight: 600; }
 /* Output row goes gray once an input is edited, until the next run
    completes successfully (which re-renders the .ex-wrap fresh). */
 .ex-wrap.is-stale .ex-val.ex-out,

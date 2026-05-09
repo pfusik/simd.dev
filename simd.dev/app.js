@@ -571,13 +571,16 @@
 
     function renderIntrinsicPageHTML(name, rec) {
         const back = `<nav class="page-nav"><a href="./" data-back="1">← back to search</a></nav>`;
+        const lr = liveRunnability(rec);
         _renderExampleViewable = isLiveViewable(rec);
-        _renderExampleRunnable = isLiveRunnable(rec);
+        _renderExampleRunnable = lr.runnable;
+        _renderExampleNoRunReason = lr.reason;
         try {
             return back + renderCardHTML(name, rec, { expanded: true });
         } finally {
             _renderExampleViewable = false;
             _renderExampleRunnable = false;
+            _renderExampleNoRunReason = null;
         }
     }
 
@@ -755,7 +758,21 @@
         return true;
     }
     function isLiveRunnable(rec) {
-        if (!isLiveViewable(rec)) return false;
+        return liveRunnability(rec).runnable;
+    }
+
+    // Returns { runnable: bool, reason: string | null }. The reason is
+    // surfaced in the UI under the example so users know *why* the
+    // "update (via CE)" button is missing.
+    function liveRunnability(rec) {
+        if (!isLiveViewable(rec)) {
+            return {
+                runnable: false,
+                reason: 'Live update needs editable input vectors; this '
+                    + "intrinsic takes a pointer, which the harness can't "
+                    + 'synthesize yet.',
+            };
+        }
         const v = rec.example.verified_via;
         // Intel `execute` records can re-run via CE's executor mode (CE
         // ships an executor backend for x86). For ARM, CE's compilers
@@ -763,9 +780,25 @@
         // are doomed to silent .zero output via the fold path. Suppress
         // the live-update button there; "see on CE" still works for
         // inspection.
-        if (v === 'fold') return true;
-        if (v === 'execute' && isIntelIntrinsic(rec.name)) return true;
-        return false;
+        if (v === 'fold') return { runnable: true, reason: null };
+        if (v === 'execute' && isIntelIntrinsic(rec.name)) {
+            return { runnable: true, reason: null };
+        }
+        if (v === 'execute') {
+            return {
+                runnable: false,
+                reason: "Clang's IR folder doesn't model this op (saturating, "
+                    + "table-lookup, crypto, ...), and CE's ARM cross-compilers "
+                    + 'have no executor backend, so a re-run can\'t produce the '
+                    + 'result here. The cached values were verified by linking '
+                    + '+ running locally; click "↗ see on CE" to inspect the '
+                    + 'asm.',
+            };
+        }
+        return {
+            runnable: false,
+            reason: 'No verified worked example was found for this intrinsic.',
+        };
     }
 
     function laneLiteral(v, info) {
@@ -1429,8 +1462,10 @@
         // updating doesn't snap them back to dec.
         const wasHex = exNode.classList.contains('hex');
         const parent = wrap ? wrap.parentNode : exNode.parentNode;
+        const lr = liveRunnability(rec);
         _renderExampleViewable = isLiveViewable(rec);
-        _renderExampleRunnable = isLiveRunnable(rec);
+        _renderExampleRunnable = lr.runnable;
+        _renderExampleNoRunReason = lr.reason;
         try {
             (wrap || exNode).outerHTML = renderExample(
                 newExample, rec.name, { changedOutputLanes }
@@ -1438,6 +1473,7 @@
         } finally {
             _renderExampleViewable = false;
             _renderExampleRunnable = false;
+            _renderExampleNoRunReason = null;
         }
         if (wasHex && parent) {
             const newEx = parent.querySelector('.ex-wrap .ex')
@@ -1488,6 +1524,7 @@
     //   _renderExampleRunnable -- additionally show "run on CE" button
     let _renderExampleViewable = false;
     let _renderExampleRunnable = false;
+    let _renderExampleNoRunReason = null;
 
     // Lane info that's Intel-aware: for `__m128i` etc., the lane shape
     // comes from the intrinsic-name suffix, not the C type.
@@ -1701,6 +1738,14 @@
         const status = _renderExampleViewable
             ? `<div class="ex-status" role="status"></div>`
             : '';
+        // When the worked example exists but live update doesn't work,
+        // surface the reason so users aren't left wondering where the
+        // "↻ update" button went.
+        const noRunNote = (_renderExampleViewable && !_renderExampleRunnable
+                && _renderExampleNoRunReason)
+            ? `<div class="ex-norun"><strong>No live update:</strong> `
+                + `${escapeHtml(_renderExampleNoRunReason)}</div>`
+            : '';
         const hint = _renderExampleViewable
             ? (_renderExampleRunnable
                 ? `<div class="ex-hint"><em>input values are editable</em> — change a number and click <strong>↻ update (via CE)</strong> to recompile (or <strong>↗ see on CE</strong> to inspect the harness).</div>`
@@ -1712,7 +1757,7 @@
         return (
             `<div class="ex-wrap">` + hint +
             `<div class="ex" style="grid-template-columns:${cols}">${toggle}${cells.join('')}</div>` +
-            runBtn + seeBtn + status +
+            runBtn + seeBtn + status + noRunNote +
             `</div>`
         );
     }
