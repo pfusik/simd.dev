@@ -318,6 +318,32 @@
         return parts.join(' ');
     }
 
+    // ---- "Related" index: union of pseudocode-cluster siblings and
+    // names whose digit-positions can be substituted to reach this one
+    // (e.g. _mm_add_epi32 ↔ _mm_add_epi8/16/64). The template index is
+    // built lazily on first lookup and cached. It's purely a UI-side
+    // computation -- no data-side schema change.
+    let _templateIndex = null;
+    function _buildTemplateIndex() {
+        const idx = Object.create(null);
+        for (const n of Object.keys(records)) {
+            const tpl = n.replace(/\d+/g, '#');
+            (idx[tpl] || (idx[tpl] = [])).push(n);
+        }
+        _templateIndex = idx;
+    }
+    function relatedNames(name, rec) {
+        const set = new Set();
+        if (rec && rec.cluster && clusters && clusters[rec.cluster]) {
+            for (const s of clusters[rec.cluster]) if (s !== name) set.add(s);
+        }
+        if (!_templateIndex) _buildTemplateIndex();
+        const tpl = name.replace(/\d+/g, '#');
+        const tplList = _templateIndex[tpl];
+        if (tplList) for (const s of tplList) if (s !== name) set.add(s);
+        return [...set].sort();
+    }
+
     function recordMetaFor(name) {
         // Returns { archs, families } for a name. For ambiguous aliases, union
         // the targets' arch/family.
@@ -496,21 +522,19 @@
             sections.push({ id: 'ex', label: 'example',
                 body: renderNoExample(name, rec) });
         }
-        if (rec.cluster && clusters && clusters[rec.cluster]) {
-            const siblings = clusters[rec.cluster].filter(n => n !== name);
-            if (siblings.length > 0) {
-                const VAR_LIMIT = 50;
-                const head = siblings.slice(0, VAR_LIMIT);
-                const tail = siblings.slice(VAR_LIMIT);
-                const chip = n => `<button type="button" class="variant" data-name="${escapeAttr(n)}">${escapeHtml(n)}</button>`;
-                let html = head.map(chip).join('');
-                if (tail.length) {
-                    html += `<span class="variants-tail" hidden>${tail.map(chip).join('')}</span>`;
-                    html += `<button type="button" class="variants-more" data-more="1">+${tail.length} more</button>`;
-                }
-                sections.push({ id: 'vars', label: siblings.length + ' variants',
-                    body: `<div class="variants-list">${html}</div>` });
+        const siblings = relatedNames(name, rec);
+        if (siblings.length > 0) {
+            const VAR_LIMIT = 50;
+            const head = siblings.slice(0, VAR_LIMIT);
+            const tail = siblings.slice(VAR_LIMIT);
+            const chip = n => `<button type="button" class="variant" data-name="${escapeAttr(n)}">${escapeHtml(n)}</button>`;
+            let html = head.map(chip).join('');
+            if (tail.length) {
+                html += `<span class="variants-tail" hidden>${tail.map(chip).join('')}</span>`;
+                html += `<button type="button" class="variants-more" data-more="1">+${tail.length} more</button>`;
             }
+            sections.push({ id: 'vars', label: siblings.length + ' related',
+                body: `<div class="variants-list">${html}</div>` });
         }
 
         let body = '';
