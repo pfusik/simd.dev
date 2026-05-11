@@ -28,6 +28,7 @@ Each entry should explain *why* before *what*.
 - [SIMD support for RISC-V vector and WebAssembly SIMD](#simd-support-for-risc-v-vector-and-webassembly-simd)
 - [Refresh detection](#refresh-detection)
 - [Search / lookup endpoint](#search--lookup-endpoint)
+- [Scrape Intel iguide per-intrinsic Performance section](#scrape-intel-iguide-per-intrinsic-performance-section)
 
 **[Done](#done)**
 - [Variant detection via pseudocode hash](#variant-detection-via-pseudocode-hash)
@@ -506,6 +507,26 @@ hit them.
 index is already small enough to ship to every page; with a fuzzy match
 (e.g., "addmask" → `_mm512_mask_add_pd`) this becomes the keyboard-first
 counterpart to hover detection.
+
+## Scrape Intel iguide per-intrinsic Performance section
+
+**Why:** Intel's intrinsics-guide pages have a "Performance" expandable
+section per intrinsic showing latency/throughput per microarch
+(Skylake / Ice Lake / Tiger Lake / Alder Lake / Sapphire Rapids …) in
+a much friendlier presentation than uops.info's wall-of-numbers table.
+The data lives in a separate JSON the page fetches at runtime — not in
+the `data-latest.xml` we already cache.
+
+We already link out to uops.info from each Intel intrinsic
+(`perf: MNEMONIC →`), which is comprehensive and covers AMD too. The
+Intel scrape would be a supplement: nicer presentation, narrower set
+of microarchs, x86-only. Probably surfaces alongside (not instead of)
+the uops.info link.
+
+**Approach:** crawl the iguide pages once, parse the embedded perf
+JSON, store it per intrinsic in a separate static asset
+(`dist/perf-intel.json`) so it doesn't inflate the main data file.
+Same lazy-load pattern we'll use for the ARM `llvm-mca` perf table.
 
 # Done
 

@@ -551,6 +551,16 @@
             sections.push({ id: 'vars', label: siblings.length + ' related',
                 body: `<div class="variants-list">${html}</div>` });
         }
+        // ARM perf table: on the dedicated /?intrinsic page only, render
+        // a placeholder section that lazy-loads arm-perf.json and
+        // populates it. We don't want this in compact card / tooltip mode
+        // (too much vertical real estate) and we don't want it preloaded
+        // alongside the main data file.
+        if (expanded && rec.source === 'arm-acle') {
+            sections.push({ id: 'perf', label: 'asm perf',
+                body: `<div class="arm-perf" data-intrinsic="${escapeAttr(name)}">`
+                    + `<div class="arm-perf-loading">loading...</div></div>` });
+        }
 
         let body = '';
         if (sections.length) {
@@ -666,6 +676,8 @@
         if (window.SimdTooltips && window.SimdTooltips.scan) {
             window.SimdTooltips.scan($card);
         }
+        // Lazy-load the per-microarch perf table for ARM intrinsics.
+        hydrateArmPerf($card).catch(() => {});
     }
 
     function exitIntrinsicPage(opts = {}) {
@@ -1633,6 +1645,73 @@
               + 'vectors to produce a meaningful worked example. Open a '
               + 'feature request with a suggested input pair.' },
     ];
+
+    // ARM per-microarch perf table, lazy-loaded from dist/arm-perf.json.
+    // The intrinsic page renders an empty `.arm-perf` placeholder; after
+    // the card is mounted, we call hydrateArmPerf() to fetch (once),
+    // look up the intrinsic's asm form, and inject the table.
+    let _armPerfPromise = null;
+    function loadArmPerf() {
+        if (_armPerfPromise) return _armPerfPromise;
+        _armPerfPromise = fetch('dist/arm-perf.json', { credentials: 'omit' })
+            .then(r => r.ok ? r.json() : null)
+            .catch(() => null);
+        return _armPerfPromise;
+    }
+
+    async function hydrateArmPerf(root) {
+        const slots = root.querySelectorAll('.arm-perf[data-intrinsic]');
+        if (!slots.length) return;
+        const data = await loadArmPerf();
+        for (const slot of slots) {
+            const name = slot.dataset.intrinsic;
+            slot.innerHTML = renderArmPerfBody(data, name);
+        }
+    }
+
+    function renderArmPerfBody(data, name) {
+        if (!data) return '<div class="arm-perf-empty">Perf data not available '
+            + '(arm-perf.json missing -- run scripts/build_arm_perf.py).</div>';
+        const form = data.intrinsics[name];
+        if (!form) {
+            return '<div class="arm-perf-empty">No asm form classified for this '
+                + 'intrinsic (probably a multi-instruction or pointer-arg lowering '
+                + 'we don\'t yet model).</div>';
+        }
+        const row = data.forms[form];
+        const haveAny = row && row.some(r => r);
+        if (!haveAny) {
+            return `<div class="arm-perf-empty">LLVM has no scheduling model `
+                + `entry for <code>${escapeHtml(form)}</code> on any of our `
+                + `tracked microarchs.</div>`;
+        }
+        const cells = [];
+        cells.push(`<div class="arm-perf-form">asm: <code>${escapeHtml(form)}</code></div>`);
+        let html = '<table class="arm-perf-table">';
+        html += '<thead><tr><th class="arm-perf-mcpu">microarch</th>'
+            + '<th title="micro-ops">uops</th>'
+            + '<th title="latency in cycles">lat</th>'
+            + '<th title="reciprocal throughput (cycles per instruction; lower is faster)">rT</th>'
+            + '</tr></thead><tbody>';
+        for (let i = 0; i < data.microarchs.length; i++) {
+            const m = data.microarchs[i];
+            const r = row[i];
+            if (r) {
+                html += `<tr><td class="arm-perf-mcpu">${escapeHtml(m)}</td>`
+                    + `<td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td></tr>`;
+            } else {
+                html += `<tr class="arm-perf-na"><td class="arm-perf-mcpu">${escapeHtml(m)}</td>`
+                    + `<td colspan="3">no model</td></tr>`;
+            }
+        }
+        html += '</tbody></table>';
+        const llvmTdUrl = 'https://github.com/llvm/llvm-project/tree/main/llvm/lib/Target/AArch64';
+        cells.push(html);
+        cells.push(`<div class="arm-perf-foot">Derived from LLVM's `
+            + `<a href="${llvmTdUrl}" target="_blank" rel="noopener">AArch64 scheduling models</a> `
+            + `via <code>llvm-mca&nbsp;--instruction-info</code>.</div>`);
+        return cells.join('');
+    }
 
     function renderNoExample(name, rec) {
         for (const { match, reason } of NO_EXAMPLE_REASONS) {

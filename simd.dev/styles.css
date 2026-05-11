@@ -564,6 +564,46 @@ button.tag-filter:hover, button.tag-filter:focus-visible {
     max-width: 60ch;
 }
 .ex-norun strong { color: var(--fg); font-weight: 600; }
+
+.arm-perf { font-size: 0.9em; }
+.arm-perf-loading, .arm-perf-empty {
+    color: var(--muted);
+    font-style: italic;
+    padding: 4px 0;
+}
+.arm-perf-form {
+    color: var(--muted);
+    margin-bottom: 6px;
+}
+.arm-perf-form code {
+    color: var(--fg);
+    background: var(--accent-soft);
+    padding: 1px 6px;
+    border-radius: 3px;
+}
+.arm-perf-table {
+    border-collapse: collapse;
+    font-variant-numeric: tabular-nums;
+}
+.arm-perf-table th, .arm-perf-table td {
+    padding: 3px 12px 3px 0;
+    text-align: right;
+}
+.arm-perf-table th {
+    font-weight: 600;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+}
+.arm-perf-table .arm-perf-mcpu {
+    text-align: left;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.arm-perf-table .arm-perf-na td { color: var(--muted); font-style: italic; }
+.arm-perf-foot {
+    margin-top: 8px;
+    font-size: 0.85em;
+    color: var(--muted);
+}
 /* Output row goes gray once an input is edited, until the next run
    completes successfully (which re-renders the .ex-wrap fresh). */
 .ex-wrap.is-stale .ex-val.ex-out,

@@ -132,6 +132,13 @@
     (Intel + AMD).
   </p>
   <p>
+    ARM intrinsic pages also carry an <em>asm perf</em> table sourced
+    from LLVM's
+    <a href="https://github.com/llvm/llvm-project/tree/main/llvm/lib/Target/AArch64" target="_blank" rel="noopener">AArch64 scheduling models</a>
+    via <code>llvm-mca&nbsp;--instruction-info</code>, lazy-loaded only
+    when you visit an ARM intrinsic's dedicated page.
+  </p>
+  <p>
     Big thanks to <a href="https://xania.org/" target="_blank" rel="noopener">Matt Godbolt</a> for letting us use
     <a href="https://godbolt.org/" target="_blank" rel="noopener">Compiler Explorer</a> as the live backend for editable
     worked-example recompilation.

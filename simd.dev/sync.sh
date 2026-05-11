@@ -13,9 +13,11 @@ if [[ ! -d "$SRC" ]]; then
 fi
 
 mkdir -p "$DEST"
-for f in simd-tooltips.js simd-names.json simd-data.json; do
-    cp "$SRC/$f" "$DEST/$f"
-    printf '  %12d B  %s\n' "$(wc -c < "$DEST/$f" | tr -d ' ')" "$DEST/$f"
+for f in simd-tooltips.js simd-names.json simd-data.json arm-perf.json; do
+    if [[ -f "$SRC/$f" ]]; then
+        cp "$SRC/$f" "$DEST/$f"
+        printf '  %12d B  %s\n' "$(wc -c < "$DEST/$f" | tr -d ' ')" "$DEST/$f"
+    fi
 done
 
 # simd-annotate's example files. The "original" + "annotated" pair are
