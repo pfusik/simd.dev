@@ -428,6 +428,8 @@ def main():
                 rec["no_ce"] = True
             if r.get("felix_url"):
                 rec["felix_url"] = r["felix_url"]
+            if r.get("asm_mnemonic"):
+                rec["asm_mnemonic"] = r["asm_mnemonic"]
             by_canonical[name] = rec
             ex = verifier_examples.get(name)
             if ex is not None:

@@ -377,6 +377,19 @@ def felix_url_for_intrinsic(intr, felix_map: dict[str, str]) -> str | None:
     return FELIX_URL_BASE + slugs.pop()
 
 
+def asm_mnemonic_for_intrinsic(intr) -> str | None:
+    """Return the single raw asm mnemonic this intrinsic lowers to, or
+    None if there's zero or more than one distinct mnemonic. Used to
+    build the uops.info search URL (which distinguishes operand-form
+    variants under one mnemonic)."""
+    names = {(ins.get("name") or "").strip().upper()
+             for ins in intr.findall("instruction")}
+    names.discard("")
+    if len(names) != 1:
+        return None
+    return next(iter(names))
+
+
 def intel_records():
     src = CACHE / "intel_intrinsics.xml"
     tree = ET.parse(src)
@@ -414,6 +427,7 @@ def intel_records():
 
         pseudocode = (intr.findtext("operation") or "").strip()
         felix_url = felix_url_for_intrinsic(intr, felix_map)
+        asm_mnemonic = asm_mnemonic_for_intrinsic(intr)
 
         rec = {
             "intrinsic": name,
@@ -429,6 +443,8 @@ def intel_records():
         }
         if felix_url:
             rec["felix_url"] = felix_url
+        if asm_mnemonic:
+            rec["asm_mnemonic"] = asm_mnemonic
         yield rec
 
 

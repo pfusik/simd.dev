@@ -1014,6 +1014,15 @@
       const m = rec.felix_url.split('/').pop().split(':')[0].toUpperCase();
       links.push(`<a href="${escapeAttr(rec.felix_url)}" target="_blank" rel="noopener" title="Intel SDM (Felix Cloutier mirror)">asm: ${escapeHtml(m)} →</a>`);
     }
+    if (rec.asm_mnemonic) {
+      const u = 'https://uops.info/table.html?search=' + encodeURIComponent(rec.asm_mnemonic.toLowerCase())
+        + '&cb_lat=on&cb_tp=on&cb_uops=on&cb_ports=on'
+        + '&cb_ARLP=on&cb_ARLE=on&cb_ZEN5=on'
+        + '&cb_measurements=on&cb_doc=on'
+        + '&cb_base=on&cb_aes=on&cb_avx=on&cb_avx2=on&cb_avx512=on'
+        + '&cb_bmi=on&cb_fma=on&cb_mmx=on&cb_sse=on&cb_x87=on';
+      links.push(`<a href="${escapeAttr(u)}" target="_blank" rel="noopener" title="uops.info — measured latency/throughput/uops/ports per microarch">perf: ${escapeHtml(rec.asm_mnemonic)} →</a>`);
+    }
     const ceUrl = compilerExplorerUrl(rec);
     if (ceUrl) {
       links.push(`<a href="${escapeAttr(ceUrl)}" target="_blank" rel="noopener">Compiler Explorer →</a>`);

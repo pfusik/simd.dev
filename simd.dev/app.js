@@ -318,6 +318,21 @@
         return parts.join(' ');
     }
 
+    // uops.info search URL template: latency / throughput / uop count /
+    // port distribution on a configurable set of microarchs. Defaults
+    // here cover recent Intel (Arrow Lake P + E cores) and AMD (Zen 5),
+    // with all SIMD categories enabled so any mnemonic finds matches.
+    // The user can toggle more microarchs on the page itself.
+    function uopsInfoUrl(mnemonic) {
+        const m = (mnemonic || '').toLowerCase();
+        return 'https://uops.info/table.html?search=' + encodeURIComponent(m)
+            + '&cb_lat=on&cb_tp=on&cb_uops=on&cb_ports=on'
+            + '&cb_ARLP=on&cb_ARLE=on&cb_ZEN5=on'
+            + '&cb_measurements=on&cb_doc=on'
+            + '&cb_base=on&cb_aes=on&cb_avx=on&cb_avx2=on&cb_avx512=on'
+            + '&cb_bmi=on&cb_fma=on&cb_mmx=on&cb_sse=on&cb_x87=on';
+    }
+
     // ---- "Related" index: union of pseudocode-cluster siblings and
     // names whose digit-positions can be substituted to reach this one
     // (e.g. _mm_add_epi32 ↔ _mm_add_epi8/16/64). The template index is
@@ -570,6 +585,14 @@
         if (rec.felix_url) {
             const m = rec.felix_url.split('/').pop().split(':')[0].toUpperCase();
             links.push(`<a class="upstream-link" href="${escapeAttr(rec.felix_url)}" target="_blank" rel="noopener" title="Intel SDM (Felix Cloutier mirror)">asm: ${escapeHtml(m)} →</a>`);
+        }
+        // uops.info: measured latency/throughput/uops/ports across recent
+        // Intel + AMD microarchs. One mnemonic often has several
+        // operand-form variants (XMM,XMM,M128 vs XMM,XMM,XMM, ...);
+        // search-based URL aggregates them.
+        if (rec.asm_mnemonic) {
+            const u = uopsInfoUrl(rec.asm_mnemonic);
+            links.push(`<a class="upstream-link" href="${escapeAttr(u)}" target="_blank" rel="noopener" title="uops.info — measured latency/throughput/uops/ports per microarch">perf: ${escapeHtml(rec.asm_mnemonic)} →</a>`);
         }
         const ceUrl = (window.SimdTooltips && window.SimdTooltips.compilerExplorerUrl)
             ? window.SimdTooltips.compilerExplorerUrl(rec)
