@@ -321,17 +321,22 @@ def intel_records():
         # If no CPUID is given, fall back to the "tech" attribute (e.g. "Other", "AVX-512").
         family = sorted(set(cpuids)) if cpuids else [intr.get("tech", "Other")]
 
-        if name in llvm:
+        # Prefer the Intel iguide's prose over clang's header comments:
+        # the iguide uses public parameter names (e.g. `a`, `mask`),
+        # whereas clang's headers refer to its internal `__X` / `__Y`
+        # placeholders which don't match our exposed signatures. LLVM
+        # text stays as the fallback for the rare case the iguide
+        # ships an empty <description>.
+        xml_desc = (intr.findtext("description") or "").strip()
+        if xml_desc:
+            desc = shorten(xml_desc)
+            desc_source = "intel-iguide"
+        elif name in llvm:
             desc = shorten(llvm[name])
             desc_source = "llvm"
         else:
-            xml_desc = (intr.findtext("description") or "").strip()
-            if xml_desc:
-                desc = shorten(xml_desc)
-                desc_source = "intel-iguide"
-            else:
-                desc = shorten(synth_intel_description(intr))
-                desc_source = "synth" if desc else ""
+            desc = shorten(synth_intel_description(intr))
+            desc_source = "synth" if desc else ""
 
         pseudocode = (intr.findtext("operation") or "").strip()
 
