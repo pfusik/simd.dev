@@ -148,10 +148,13 @@ function formatHover(name, rec, config) {
     }
     if (links.length) md.appendMarkdown('\n' + links.join(' · ') + '\n');
 
-    // Attribution footer.
+    // Attribution footer: link the intrinsic name to its dedicated
+    // page, and "simd.dev" to the database home. Both are friendlier
+    // landing pages than the GitHub repo.
+    const safe = encodeURIComponent(name);
     md.appendMarkdown(
-        '\n\n---\n\n_[simd-vscode](https://github.com/MarcinZukowski/simd.dev) ' +
-        'by [simd.dev](https://github.com/MarcinZukowski/simd.dev)_'
+        `\n\n---\n\n_[${name}](https://simd.dev/?intrinsic=${safe}) ` +
+        'on [simd.dev](https://simd.dev/)_'
     );
 
     return md;
