@@ -132,11 +132,14 @@
     (Intel + AMD).
   </p>
   <p>
-    ARM intrinsic pages also carry an <em>asm perf</em> table sourced
-    from LLVM's
+    Intrinsic pages also carry an <em>asm perf</em> table:
+    Intel intrinsics show Intel's own per-microarch numbers (Alder Lake / Ice Lake /
+    Sapphire Rapids / Skylake) lazy-loaded straight from the iguide's
+    <a href="https://www.intel.com/content/dam/develop/public/us/en/include/intrinsics-guide/perf2.js" target="_blank" rel="noopener">perf2.js</a>;
+    ARM intrinsics show numbers derived from LLVM's
     <a href="https://github.com/llvm/llvm-project/tree/main/llvm/lib/Target/AArch64" target="_blank" rel="noopener">AArch64 scheduling models</a>
-    via <code>llvm-mca&nbsp;--instruction-info</code>, lazy-loaded only
-    when you visit an ARM intrinsic's dedicated page.
+    via <code>llvm-mca&nbsp;--instruction-info</code>. Both load only
+    when you visit an intrinsic's dedicated page.
   </p>
   <p>
     Big thanks to <a href="https://xania.org/" target="_blank" rel="noopener">Matt Godbolt</a> for letting us use

@@ -390,6 +390,20 @@ def asm_mnemonic_for_intrinsic(intr) -> str | None:
     return next(iter(names))
 
 
+def xed_for_intrinsic(intr) -> str | None:
+    """The iguide's <instruction> tag carries an XED operand-form
+    encoding (e.g. PADDD_XMMdq_XMMdq). Intel's own perf2.js is keyed
+    by these, so we ship the xed alongside the intrinsic record and
+    let the front-end look up per-microarch latency/throughput at
+    runtime. Skip if zero or multiple distinct xeds (rare)."""
+    xeds = {(ins.get("xed") or "").strip()
+            for ins in intr.findall("instruction")}
+    xeds.discard("")
+    if len(xeds) != 1:
+        return None
+    return next(iter(xeds))
+
+
 def intel_records():
     src = CACHE / "intel_intrinsics.xml"
     tree = ET.parse(src)
@@ -428,6 +442,7 @@ def intel_records():
         pseudocode = (intr.findtext("operation") or "").strip()
         felix_url = felix_url_for_intrinsic(intr, felix_map)
         asm_mnemonic = asm_mnemonic_for_intrinsic(intr)
+        xed = xed_for_intrinsic(intr)
 
         rec = {
             "intrinsic": name,
@@ -445,6 +460,8 @@ def intel_records():
             rec["felix_url"] = felix_url
         if asm_mnemonic:
             rec["asm_mnemonic"] = asm_mnemonic
+        if xed:
+            rec["xed"] = xed
         yield rec
 
 

@@ -561,6 +561,16 @@
                 body: `<div class="arm-perf" data-intrinsic="${escapeAttr(name)}">`
                     + `<div class="arm-perf-loading">loading...</div></div>` });
         }
+        // Intel perf table: the iguide page lazy-loads a 445 KB perf2.js
+        // assigning to `window.perf2_js`, keyed by XED operand-form
+        // (PADDD_XMMdq_XMMdq, ...). Our build already captures the xed
+        // attribute; same lazy-load pattern, no copy of Intel's data
+        // shipped from our origin.
+        if (expanded && rec.source === 'intel-iguide' && rec.xed) {
+            sections.push({ id: 'perf', label: 'asm perf',
+                body: `<div class="intel-perf" data-xed="${escapeAttr(rec.xed)}">`
+                    + `<div class="arm-perf-loading">loading...</div></div>` });
+        }
 
         let body = '';
         if (sections.length) {
@@ -676,8 +686,11 @@
         if (window.SimdTooltips && window.SimdTooltips.scan) {
             window.SimdTooltips.scan($card);
         }
-        // Lazy-load the per-microarch perf table for ARM intrinsics.
+        // Lazy-load the per-microarch perf table for ARM intrinsics
+        // (from our pre-baked dist/arm-perf.json) and for Intel ones
+        // (live from Intel's perf2.js).
         hydrateArmPerf($card).catch(() => {});
+        hydrateIntelPerf($card).catch(() => {});
     }
 
     function exitIntrinsicPage(opts = {}) {
@@ -1667,6 +1680,68 @@
             const name = slot.dataset.intrinsic;
             slot.innerHTML = renderArmPerfBody(data, name);
         }
+    }
+
+    // Intel per-microarch perf, lazy-loaded straight from Intel's CDN.
+    // The file assigns a `perf2_js` global, keyed by XED operand-form.
+    // We don't re-host it -- the <script> tag pulls fresh data each
+    // page load (subject to browser cache).
+    let _intelPerfPromise = null;
+    const INTEL_PERF_URL =
+        'https://www.intel.com/content/dam/develop/public/us/en/include/intrinsics-guide/perf2.js';
+    function loadIntelPerf() {
+        if (_intelPerfPromise) return _intelPerfPromise;
+        _intelPerfPromise = new Promise(resolve => {
+            if (window.perf2_js) return resolve(window.perf2_js);
+            const s = document.createElement('script');
+            s.src = INTEL_PERF_URL;
+            s.async = true;
+            s.onload = () => resolve(window.perf2_js || null);
+            s.onerror = () => resolve(null);
+            document.head.appendChild(s);
+        });
+        return _intelPerfPromise;
+    }
+
+    async function hydrateIntelPerf(root) {
+        const slots = root.querySelectorAll('.intel-perf[data-xed]');
+        if (!slots.length) return;
+        const perf = await loadIntelPerf();
+        for (const slot of slots) {
+            const xed = slot.dataset.xed;
+            slot.innerHTML = renderIntelPerfBody(perf, xed);
+        }
+    }
+
+    function renderIntelPerfBody(perf, xed) {
+        if (!perf) {
+            return '<div class="arm-perf-empty">Intel\'s perf2.js failed to load '
+                + '(blocked or offline).</div>';
+        }
+        const rows = perf[xed];
+        if (!rows || !rows.length) {
+            return `<div class="arm-perf-empty">No entry for <code>${escapeHtml(xed)}</code> `
+                + `in Intel's perf2.js (newer ops -- e.g. AMX tiles -- often unmeasured).</div>`;
+        }
+        let html = `<div class="arm-perf-form">xed: <code>${escapeHtml(xed)}</code></div>`;
+        html += '<table class="arm-perf-table">';
+        html += '<thead><tr><th class="arm-perf-mcpu">microarch</th>'
+            + '<th title="latency in cycles">lat</th>'
+            + '<th title="reciprocal throughput (cycles per instruction; lower is faster)">rT</th>'
+            + '</tr></thead><tbody>';
+        for (const row of rows) {
+            const k = Object.keys(row)[0];
+            const v = row[k] || {};
+            const lat = v.l || '?';
+            const tp = v.t || '?';
+            html += `<tr><td class="arm-perf-mcpu">${escapeHtml(k)}</td>`
+                + `<td>${escapeHtml(lat)}</td><td>${escapeHtml(tp)}</td></tr>`;
+        }
+        html += '</tbody></table>';
+        html += '<div class="arm-perf-foot">Sourced live from Intel\'s '
+            + '<a href="' + INTEL_PERF_URL + '" target="_blank" rel="noopener">perf2.js</a>, '
+            + 'the same file the official iguide page fetches.</div>';
+        return html;
     }
 
     function renderArmPerfBody(data, name) {
