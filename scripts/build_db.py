@@ -305,6 +305,78 @@ def synth_intel_description(intr: ET.Element) -> str:
     return " ".join(bits).strip()
 
 
+FELIX_URL_BASE = "https://www.felixcloutier.com/x86/"
+
+
+_FELIX_SUFFIXES = ("SS", "SD", "PS", "PD", "PH", "BH", "PI", "SI", "BR")
+
+
+def felix_lookup(felix_map: dict[str, str], mnemonic: str) -> str | None:
+    """Map an Intel iguide instruction mnemonic to its Felix Cloutier slug.
+
+    Felix's index lists each base mnemonic with its (possibly grouped)
+    page slug, but doesn't enumerate every encoded variant. Several
+    naming patterns we have to strip to land on the index:
+
+      VPADDD    -> PADDD     (VEX/EVEX V-prefix on a non-VEX op)
+      VPORD     -> POR       (V-prefix + EVEX D/Q suffix)
+      VBROADCASTSS -> VBROADCAST  (FP suffix SS/SD/PS/PD/...)
+      VPMOVZXBQ -> PMOVZX    (source-dest pair suffix BD/BQ/BW/DQ/...)
+
+    Try the candidates in priority order; first hit wins. Verbatim
+    match is always tried first so EVEX-only ops with their own page
+    (VPGATHERDD, VPTERNLOGD, VPOPCNTQ → vpopcnt) get their own page.
+    """
+    if not mnemonic:
+        return None
+
+    def derived(m: str) -> list[str]:
+        out = [m]
+        if len(m) > 3 and m[-1] in "DQBW":
+            out.append(m[:-1])
+        for sfx in _FELIX_SUFFIXES:
+            if m.endswith(sfx) and len(m) > len(sfx) + 2:
+                out.append(m[: -len(sfx)])
+        if len(m) > 5 and m[-1] in "BWDQ" and m[-2] in "BWDQ":
+            out.append(m[:-2])
+        return out
+
+    cands = list(derived(mnemonic))
+    if mnemonic.startswith("V") and len(mnemonic) > 1:
+        for c in derived(mnemonic[1:]):
+            if c not in cands:
+                cands.append(c)
+    for c in cands:
+        if c in felix_map:
+            return felix_map[c]
+    # Last-resort fallback: progressively chop trailing chars until we
+    # land on an indexed prefix. Catches VBROADCASTI32X2 → VBROADCAST,
+    # VEXTRACTF64X2 → VEXTRACT, etc. Cap at 6 chars min so we don't
+    # mis-resolve a short mnemonic to an unrelated longer one.
+    for L in range(len(mnemonic) - 1, 5, -1):
+        if mnemonic[:L] in felix_map:
+            return felix_map[mnemonic[:L]]
+    return None
+
+
+def felix_url_for_intrinsic(intr, felix_map: dict[str, str]) -> str | None:
+    """If the intrinsic compiles to exactly one Felix-known mnemonic
+    (across all its <instruction> entries -- typical for a single
+    intrinsic, since width/EVEX variants share a base page), return
+    the absolute Felix URL. Otherwise None.
+    """
+    slugs: set[str] = set()
+    for ins in intr.findall("instruction"):
+        m = (ins.get("name") or "").strip().upper()
+        slug = felix_lookup(felix_map, m)
+        if slug is None:
+            return None
+        slugs.add(slug)
+    if len(slugs) != 1:
+        return None
+    return FELIX_URL_BASE + slugs.pop()
+
+
 def intel_records():
     src = CACHE / "intel_intrinsics.xml"
     tree = ET.parse(src)
@@ -312,6 +384,8 @@ def intel_records():
 
     llvm_path = CACHE / "llvm_descriptions.json"
     llvm = json.loads(llvm_path.read_text()) if llvm_path.exists() else {}
+    felix_path = CACHE / "felix_x86.json"
+    felix_map = json.loads(felix_path.read_text()) if felix_path.exists() else {}
 
     for intr in root.findall("intrinsic"):
         name = intr.get("name", "")
@@ -339,8 +413,9 @@ def intel_records():
             desc_source = "synth" if desc else ""
 
         pseudocode = (intr.findtext("operation") or "").strip()
+        felix_url = felix_url_for_intrinsic(intr, felix_map)
 
-        yield {
+        rec = {
             "intrinsic": name,
             "aliases": [],
             "arch": list(INTEL_DEFAULT_ARCH),
@@ -352,6 +427,9 @@ def intel_records():
             "pseudocode_hash": pseudocode_hash(pseudocode),
             "source": "intel-iguide",
         }
+        if felix_url:
+            rec["felix_url"] = felix_url
+        yield rec
 
 
 # ---------------------------------------------------------------------------

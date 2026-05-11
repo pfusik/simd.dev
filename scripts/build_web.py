@@ -426,6 +426,8 @@ def main():
                 rec["kind"] = kind
             if no_ce:
                 rec["no_ce"] = True
+            if r.get("felix_url"):
+                rec["felix_url"] = r["felix_url"]
             by_canonical[name] = rec
             ex = verifier_examples.get(name)
             if ex is not None:

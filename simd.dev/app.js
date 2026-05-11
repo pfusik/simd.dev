@@ -563,6 +563,14 @@
         const linkLabel = rec.source === 'arm-acle' ? 'Arm developer docs →' : 'Intel Intrinsics Guide →';
         const links = [];
         if (rec.doc_url) links.push(`<a class="upstream-link" href="${escapeAttr(rec.doc_url)}" target="_blank" rel="noopener">${linkLabel}</a>`);
+        // Felix Cloutier mirror of the Intel SDM for the underlying
+        // asm mnemonic -- only emitted by the build for Intel intrinsics
+        // that lower to a single Felix-indexed instruction. Show the
+        // mnemonic in the label so the user knows what's on the page.
+        if (rec.felix_url) {
+            const m = rec.felix_url.split('/').pop().split(':')[0].toUpperCase();
+            links.push(`<a class="upstream-link" href="${escapeAttr(rec.felix_url)}" target="_blank" rel="noopener" title="Intel SDM (Felix Cloutier mirror)">asm: ${escapeHtml(m)} →</a>`);
+        }
         const ceUrl = (window.SimdTooltips && window.SimdTooltips.compilerExplorerUrl)
             ? window.SimdTooltips.compilerExplorerUrl(rec)
             : null;

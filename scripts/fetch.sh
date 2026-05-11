@@ -22,4 +22,7 @@ echo "fetching Intel intrinsics XML ..."
 curl -fsSL "$INTEL_URL" -o "$CACHE/intel_intrinsics.xml"
 echo "  $(wc -c < "$CACHE/intel_intrinsics.xml") bytes"
 
+echo "scraping felixcloutier.com/x86/ index ..."
+python3 "$HERE/scripts/scrape_felix.py"
+
 echo "done."

@@ -1004,11 +1004,15 @@
     const archs = (rec.arch || []).map(a => `<span class="simd-tt-arch">${escapeHtml(a)}</span>`).join(' ');
     const desc = rec.description ? `<div class="simd-tt-desc">${escapeHtml(rec.description)}</div>` : '';
 
-    // Footer: doc link + Compiler Explorer link (when applicable).
+    // Footer: doc link + asm-page link (Felix Cloutier) + Compiler Explorer.
     const links = [];
     if (rec.doc_url) {
       const docLabel = rec.source === 'arm-acle' ? 'Arm developer docs' : 'Intel Intrinsics Guide';
       links.push(`<a href="${escapeAttr(rec.doc_url)}" target="_blank" rel="noopener">${docLabel} →</a>`);
+    }
+    if (rec.felix_url) {
+      const m = rec.felix_url.split('/').pop().split(':')[0].toUpperCase();
+      links.push(`<a href="${escapeAttr(rec.felix_url)}" target="_blank" rel="noopener" title="Intel SDM (Felix Cloutier mirror)">asm: ${escapeHtml(m)} →</a>`);
     }
     const ceUrl = compilerExplorerUrl(rec);
     if (ceUrl) {
