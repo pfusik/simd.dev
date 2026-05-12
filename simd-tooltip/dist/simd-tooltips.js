@@ -182,6 +182,9 @@
     listen(document, 'keydown', onKeydown, true);
     listen(window, 'scroll', repositionOrHide, { passive: true, capture: true });
     listen(window, 'resize', repositionOrHide, { passive: true });
+    // Track touchstart so mobile taps on a link-wrapped intrinsic name
+    // can be distinguished from real mouse hover and skipped.
+    listen(document, 'touchstart', _onTouchStart, { passive: true, capture: true });
   }
 
   function onDocLeave() { scheduleHide(); }
@@ -193,6 +196,9 @@
     const now = performance.now();
     if (now - lastMoveTs < cfg.moveThrottleMs) return;
     lastMoveTs = now;
+    // Same mobile-tap defense as onWrapEnter: if the recent touch
+    // landed on a link, leave the tooltip closed so the tap navigates.
+    if (_recentTouchOnLink(ev.target)) return;
     detectAndShow(ev.clientX, ev.clientY);
   }
 
@@ -441,11 +447,29 @@
   function onWrapEnter(ev) {
     const el = closestWrapped(ev.target);
     if (!el) return;
+    // Mobile hover-on-tap: when the user taps a wrapped intrinsic name
+    // that's also inside an <a href>, browsers fire a synthetic
+    // mouseover (which lands here) BEFORE the click that would have
+    // navigated. Showing the tooltip on that first tap intercepts the
+    // navigation -- the user has to tap a second time. Detect "touch
+    // initiated this event" and bow out so the tap activates the link.
+    if (_recentTouchOnLink(ev.target)) return;
     if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
     if (activeTarget === el) return;
     activeTarget = el;
     activeKey = 'wrap:' + el.dataset.name + ':' + (el._uid || (el._uid = ++_uidCounter));
     showAtRect(el.dataset.name, el.getBoundingClientRect());
+  }
+
+  // We track the most recent touchstart timestamp to distinguish "real
+  // mouse hover" from "synthetic mouseover that follows a tap". Within
+  // ~500ms of a touch, any tooltip-triggering event whose target sits
+  // inside an <a href> gets suppressed so the click can navigate.
+  let _lastTouchTs = 0;
+  function _onTouchStart() { _lastTouchTs = performance.now(); }
+  function _recentTouchOnLink(target) {
+    if (!_lastTouchTs || performance.now() - _lastTouchTs > 500) return false;
+    return !!(target && target.closest && target.closest('a[href]'));
   }
 
   function onWrapKbFocusIn(ev) {
