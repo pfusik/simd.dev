@@ -1236,6 +1236,11 @@
     .simd-tooltip code, .simd-tooltip pre {
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       font-size: 12.5px;
+      background: transparent;
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      color: inherit;
     }
     .simd-tt-head { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; margin-bottom: 6px; }
     .simd-tt-head code { color: #ffd479; font-weight: 600; }
