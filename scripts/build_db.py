@@ -181,9 +181,20 @@ def arm_signature(entry: dict, name: str) -> str:
     return f"{rt_value} {name}(\n    {inner})"
 
 
-_ARM_HTML_TAG = re.compile(r"<[^>]+>")
-_ARM_HTML_LINK = re.compile(r'<a [^>]*>([^<]*)</a>')
-_ARM_HEADING = re.compile(r'<h\d>[^<]*</h\d>')
+# Tag matcher requires `</?[a-zA-Z]` so literal `<` in the prose (e.g. the
+# `<` in `0 ≤ indices[i] < n` for svtbx) isn't mistaken for an opening tag —
+# the previous `<[^>]+>` would happily eat from a literal `<` through to the
+# next real `>`, swallowing intervening text along with the closing tag.
+_ARM_HTML_TAG = re.compile(r"</?[a-zA-Z][^>]*>")
+_ARM_HTML_LINK = re.compile(r'<a [^>]*>([^<]*)</a>', re.IGNORECASE)
+_ARM_HEADING = re.compile(r'<h\d>[^<]*</h\d>', re.IGNORECASE)
+# Block boundaries we want to surface as whitespace so list items / paragraphs
+# don't concatenate into one run-on string. Order doesn't matter; each match
+# is replaced with a single newline before generic tag stripping happens.
+_ARM_BLOCK_BREAK = re.compile(
+    r'</(?:p|li|ul|ol|div|tr|table|h\d)>|<(?:br|li|p)\b[^>]*>',
+    re.IGNORECASE,
+)
 
 
 def _arm_strip_html(s: str) -> str:
@@ -194,8 +205,9 @@ def _arm_strip_html(s: str) -> str:
     if not s:
         return ""
     s = _ARM_HEADING.sub("", s)              # drop <h4>Operation</h4>
+    s = _ARM_BLOCK_BREAK.sub("\n", s)        # surface paragraph / list breaks
     s = _ARM_HTML_LINK.sub(r"\1", s)         # keep link text
-    s = _ARM_HTML_TAG.sub("", s)             # drop everything else
+    s = _ARM_HTML_TAG.sub("", s)             # drop remaining inline tags
     # Decode the few entities ARM actually uses.
     s = s.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&").replace("&nbsp;", " ")
     return s.strip()
