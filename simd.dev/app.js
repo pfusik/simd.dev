@@ -1745,20 +1745,23 @@
     }
 
     function renderArmPerfBody(data, name) {
+        const llvmTdUrl = 'https://github.com/llvm/llvm-project/tree/main/llvm/lib/Target/AArch64';
+        const llvmLink = `LLVM's <a href="${llvmTdUrl}" target="_blank" rel="noopener">AArch64 scheduling models</a>`;
         if (!data) return '<div class="arm-perf-empty">Perf data not available '
             + '(arm-perf.json missing -- run scripts/build_arm_perf.py).</div>';
         const form = data.intrinsics[name];
         if (!form) {
-            return '<div class="arm-perf-empty">No asm form classified for this '
-                + 'intrinsic (probably a multi-instruction or pointer-arg lowering '
-                + 'we don\'t yet model).</div>';
+            return `<div class="arm-perf-empty">Could not find performance `
+                + `information in ${llvmLink} for this intrinsic — its asm `
+                + `lowering doesn't match a single classifiable form (often a `
+                + `multi-instruction or pointer-arg lowering).</div>`;
         }
         const row = data.forms[form];
         const haveAny = row && row.some(r => r);
         if (!haveAny) {
-            return `<div class="arm-perf-empty">LLVM has no scheduling model `
-                + `entry for <code>${escapeHtml(form)}</code> on any of our `
-                + `tracked microarchs.</div>`;
+            return `<div class="arm-perf-empty">Could not find performance `
+                + `information in ${llvmLink} for <code>${escapeHtml(form)}</code> `
+                + `on any tracked microarch.</div>`;
         }
         const cells = [];
         cells.push(`<div class="arm-perf-form">asm: <code>${escapeHtml(form)}</code></div>`);
@@ -1780,10 +1783,8 @@
             }
         }
         html += '</tbody></table>';
-        const llvmTdUrl = 'https://github.com/llvm/llvm-project/tree/main/llvm/lib/Target/AArch64';
         cells.push(html);
-        cells.push(`<div class="arm-perf-foot">Derived from LLVM's `
-            + `<a href="${llvmTdUrl}" target="_blank" rel="noopener">AArch64 scheduling models</a> `
+        cells.push(`<div class="arm-perf-foot">Derived from ${llvmLink} `
             + `via <code>llvm-mca&nbsp;--instruction-info</code>.</div>`);
         return cells.join('');
     }
