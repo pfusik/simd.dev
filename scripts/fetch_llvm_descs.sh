@@ -26,7 +26,7 @@ for f in files:
         continue
     if KEEP.match(n):
         print(n)
-")
+" | tr -d '\r')
 
 count=0
 for n in $NAMES; do
