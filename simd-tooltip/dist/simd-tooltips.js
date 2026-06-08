@@ -1055,13 +1055,18 @@
     }
     const link = links.length ? `<div class="simd-tt-foot">${links.join(' &middot; ')}</div>` : '';
 
+    // The ↗ link to the dedicated simd.dev page works for both intrinsics
+    // and types (the page router renders either kind under ?intrinsic=).
+    const pageUrl = `${cfg.pageBase}?intrinsic=${encodeURIComponent(name)}`;
+    const pageLink = `<a class="simd-tt-open" href="${escapeAttr(pageUrl)}" target="_blank" rel="noopener" title="Open simd.dev page">↗</a>`;
+
     // SIMD types use a slimmer layout: the "definition" is a one-line typedef
     // and lives next to the description. Intrinsics keep the multi-line <pre>
     // signature block.
     if (rec.kind === 'type') {
       const kindBadge = `<span class="simd-tt-kind">type</span>`;
       const def = rec.definition ? `<code class="simd-tt-typedef">${escapeHtml(rec.definition)}</code>` : '';
-      return `<div class="simd-tt-head"><code>${escapeHtml(name)}</code> ${kindBadge} ${families} ${archs}</div>
+      return `<div class="simd-tt-head"><code>${escapeHtml(name)}</code> ${kindBadge} ${families} ${archs}${pageLink}</div>
         ${def}
         ${desc}
         ${link}`;
@@ -1120,9 +1125,6 @@
       ).join('');
       togglesRow = `<div class="simd-tt-toggles">${headers}${bodies}</div>`;
     }
-
-    const pageUrl = `${cfg.pageBase}?intrinsic=${encodeURIComponent(name)}`;
-    const pageLink = `<a class="simd-tt-open" href="${escapeAttr(pageUrl)}" target="_blank" rel="noopener" title="Open simd.dev page">↗</a>`;
 
     return `<div class="simd-tt-head"><code>${escapeHtml(name)}</code> ${families} ${archs}${pageLink}</div>
       <pre class="simd-tt-sig">${escapeHtml(rec.definition || '')}</pre>
