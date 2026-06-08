@@ -1441,7 +1441,12 @@
         const isHexMode = exNode.classList.contains('hex');
         for (const cell of exNode.querySelectorAll('.ex-val[data-row][data-lane]')) {
             const ri = +cell.dataset.row, li = +cell.dataset.lane;
-            const ti = laneInfo(inputs[ri].type);
+            // Intel vector types (`__m128i`, `__m256i`, ...) carry no lane
+            // shape in the type name; lane bits/kind come from the
+            // intrinsic suffix. Use laneInfoFor so hex parsing picks up
+            // the right width -- otherwise parseHexLane with bits=null
+            // masks every hex digit to 0.
+            const ti = laneInfoFor(inputs[ri].type, rec.name, 'input');
             const dec = cell.querySelector('.ex-dec');
             const hex = cell.querySelector('.ex-hexcell');
             if (!dec) continue;
