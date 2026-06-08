@@ -21,6 +21,7 @@ import functools
 import json
 import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -106,8 +107,30 @@ def _apply_hint_list(hint, count: int) -> list:
 LLVM_BIN = os.environ.get(
     "SIMD_SCRIBE_LLVM_BIN", "/opt/homebrew/Cellar/llvm/22.1.4/bin"
 )
-CLANG = f"{LLVM_BIN}/clang++"
-LLVM_OBJDUMP = f"{LLVM_BIN}/llvm-objdump"
+
+
+def resolve_llvm_tool(name: str) -> str:
+    """Resolve an LLVM tool name to a runnable path.
+
+    Looks in `$SIMD_SCRIBE_LLVM_BIN` first (the configured toolchain),
+    then falls back to the user's `$PATH`. On Windows, `shutil.which`
+    picks up `.exe` (and other PATHEXT extensions) automatically, so the
+    same name works regardless of host OS.
+
+    Returns the original `$LLVM_BIN/<name>` when nothing is found, so
+    downstream error messages still point at the configured location.
+    """
+    p = shutil.which(name, path=LLVM_BIN)
+    if p:
+        return p
+    p = shutil.which(name)
+    if p:
+        return p
+    return os.path.join(LLVM_BIN, name)
+
+
+CLANG = resolve_llvm_tool("clang++")
+LLVM_OBJDUMP = resolve_llvm_tool("llvm-objdump")
 
 # Minimum clang major required to reproduce the cached fold/execute
 # classifications. v22 is where table-lookup IR folding, FRINT (v8.5a)

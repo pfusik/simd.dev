@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -41,13 +42,48 @@ from scribe import (  # noqa: E402
     _macos_sdk_path,
     compile_flags_for,
     parse_signature,
+    resolve_llvm_tool,
 )
 
 DB_PATH = ROOT / "data" / "intrinsics.jsonl"
 OUT_PATH = ROOT / "simd-tooltip" / "dist" / "arm-perf.json"
 
-LLVM_BIN = Path(CLANG).parent
-LLVM_MCA = LLVM_BIN / "llvm-mca"
+# llvm-mca is alongside clang++ in the LLVM bin dir, but the resolver
+# also handles the PATH fallback + Windows .exe lookup that the plain
+# `Path(CLANG).parent / "llvm-mca"` join would miss.
+LLVM_MCA = resolve_llvm_tool("llvm-mca")
+
+
+def _require_llvm_tools() -> None:
+    """Pre-flight check: verify clang++ / llvm-objdump / llvm-mca exist
+    and are runnable before Phase 1 fans work out to subprocess workers.
+    Without this, a missing or misconfigured toolchain surfaces as a
+    bare FileNotFoundError from each worker -- ugly, repeated 6,000+
+    times once per intrinsic. Fail upfront with the exact path we tried
+    and a pointer to the env var.
+    """
+    missing = []
+    for label, path in [
+        ("clang++", CLANG),
+        ("llvm-objdump", LLVM_OBJDUMP),
+        ("llvm-mca", LLVM_MCA),
+    ]:
+        # `shutil.which` accepts an absolute path: returns the path if
+        # it's executable, None otherwise. That covers both .exe lookup
+        # (when the path lacks an extension on Windows) and the
+        # plain-Unix existence check.
+        if not shutil.which(path):
+            missing.append((label, path))
+    if missing:
+        lines = "\n".join(f"    {label:14s} looked for {path!r}"
+                          for label, path in missing)
+        raise SystemExit(
+            "error: required LLVM tool(s) not found:\n"
+            + lines
+            + "\n\n  Set $SIMD_SCRIBE_LLVM_BIN to a directory containing "
+              "all of\n  clang++, llvm-objdump, llvm-mca "
+              "(`.exe` suffix is auto-detected on Windows)."
+        )
 
 # Microarchs to model. LLVM ships scheduling models for these; ones
 # without a model fall back to a default that's not useful, so keep
@@ -276,6 +312,7 @@ def _extract_one(item):
 
 
 def main() -> int:
+    _require_llvm_tools()
     print(f"Reading {DB_PATH}...")
     records: dict[str, dict] = {}
     with DB_PATH.open(encoding="utf-8") as f:
