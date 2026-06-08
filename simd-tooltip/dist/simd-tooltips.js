@@ -739,6 +739,8 @@
   //   arm_neon.h            -- NEON vector ops (vaddq_*, vfmaq_*, …)
   //   arm_fp16.h            -- scalar FP16 ops (vfmah_f16, vaddh_f16, …)
   //   arm_bf16.h            -- scalar BF16 ops
+  //   arm_acle.h            -- ACLE general-purpose (CRC32 __crc32*, atomics,
+  //                            __rev/__rbit, hints, …)
   //   arm_sve.h             -- SVE / SVE2 (sv*)
   //   arm_sme.h             -- SME / SME2 (separate from arm_sve.h)
   //   arm_neon_sve_bridge.h -- NEON↔SVE conversions
@@ -754,11 +756,11 @@
   // intrinsics like vfmah_f16.
   const ARM_EXT = '+fp16+bf16+i8mm+dotprod+crypto';
   const CE_ARM_ARCHS = {
-    'Neon':         { compiler: 'armv8-full-cclang-trunk', march: 'armv8.6-a' + ARM_EXT,                                       headers: ['arm_neon.h', 'arm_fp16.h', 'arm_bf16.h'] },
-    'SVE':          { compiler: 'armv8-full-cclang-trunk', march: 'armv8.6-a+sve' + ARM_EXT,                                   headers: ['arm_sve.h', 'arm_neon_sve_bridge.h']  },
-    'SVE2':         { compiler: 'armv8-full-cclang-trunk', march: 'armv9-a' + ARM_EXT,                                         headers: ['arm_sve.h', 'arm_neon_sve_bridge.h']  },
-    'SME and SME2': { compiler: 'armv8-full-cclang-trunk', march: 'armv9.2-a+sme2+sme-i16i64+sme-f64f64' + ARM_EXT,             headers: ['arm_sve.h', 'arm_sme.h', 'arm_neon_sve_bridge.h'] },
-    'Helium':       { compiler: 'armv7-cclang-trunk',      march: 'armv8.1-m.main+mve.fp+fp.dp',                                headers: ['arm_mve.h', 'arm_fp16.h', 'arm_bf16.h'] },
+    'Neon':         { compiler: 'armv8-full-cclang-trunk', march: 'armv8.6-a' + ARM_EXT,                                       headers: ['arm_neon.h', 'arm_fp16.h', 'arm_bf16.h', 'arm_acle.h'] },
+    'SVE':          { compiler: 'armv8-full-cclang-trunk', march: 'armv8.6-a+sve' + ARM_EXT,                                   headers: ['arm_sve.h', 'arm_neon_sve_bridge.h', 'arm_acle.h']  },
+    'SVE2':         { compiler: 'armv8-full-cclang-trunk', march: 'armv9-a' + ARM_EXT,                                         headers: ['arm_sve.h', 'arm_neon_sve_bridge.h', 'arm_acle.h']  },
+    'SME and SME2': { compiler: 'armv8-full-cclang-trunk', march: 'armv9.2-a+sme2+sme-i16i64+sme-f64f64' + ARM_EXT,             headers: ['arm_sve.h', 'arm_sme.h', 'arm_neon_sve_bridge.h', 'arm_acle.h'] },
+    'Helium':       { compiler: 'armv7-cclang-trunk',      march: 'armv8.1-m.main+mve.fp+fp.dp',                                headers: ['arm_mve.h', 'arm_fp16.h', 'arm_bf16.h', 'arm_acle.h'] },
   };
 
   function ceParseSignature(def) {
