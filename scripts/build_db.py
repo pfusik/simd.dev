@@ -220,7 +220,7 @@ def _arm_load_operations() -> dict[str, str]:
     src = CACHE / "arm_operations.json"
     if not src.exists():
         return {}
-    raw = json.loads(src.read_text())
+    raw = json.loads(src.read_text(encoding="utf-8"))
     out: dict[str, str] = {}
     for entry in raw:
         item = entry.get("item") if isinstance(entry, dict) else None
@@ -232,7 +232,7 @@ def _arm_load_operations() -> dict[str, str]:
 
 def arm_records():
     src = CACHE / "arm_intrinsics.json"
-    with src.open() as f:
+    with src.open(encoding="utf-8") as f:
         entries = json.load(f)
     op_text = _arm_load_operations()
 
@@ -422,9 +422,9 @@ def intel_records():
     root = tree.getroot()
 
     llvm_path = CACHE / "llvm_descriptions.json"
-    llvm = json.loads(llvm_path.read_text()) if llvm_path.exists() else {}
+    llvm = json.loads(llvm_path.read_text(encoding="utf-8")) if llvm_path.exists() else {}
     felix_path = CACHE / "felix_x86.json"
-    felix_map = json.loads(felix_path.read_text()) if felix_path.exists() else {}
+    felix_map = json.loads(felix_path.read_text(encoding="utf-8")) if felix_path.exists() else {}
 
     for intr in root.findall("intrinsic"):
         name = intr.get("name", "")
@@ -494,7 +494,7 @@ def main():
     pseudocode_counter = Counter()
     by_source_family = {"arm-acle": Counter(), "intel-iguide": Counter()}
 
-    with out_path.open("w") as out:
+    with out_path.open("w", encoding="utf-8") as out:
         for src_iter in (arm_records, intel_records):
             for rec in src_iter():
                 out.write(json.dumps(rec, ensure_ascii=False) + "\n")
@@ -518,7 +518,7 @@ def main():
         "by_family": dict(family_counter.most_common()),
         "by_source_family": {k: dict(v.most_common()) for k, v in by_source_family.items()},
     }
-    with stats_path.open("w") as f:
+    with stats_path.open("w", encoding="utf-8") as f:
         json.dump(stats, f, indent=2)
 
     print(f"wrote {n} records -> {out_path.relative_to(ROOT)}")

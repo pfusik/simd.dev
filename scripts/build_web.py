@@ -48,7 +48,7 @@ def load_overrides() -> tuple[dict, dict]:
     """
     if not OVERRIDES.exists():
         return {}, {}
-    raw = json.loads(OVERRIDES.read_text())
+    raw = json.loads(OVERRIDES.read_text(encoding="utf-8"))
     return raw.get("by_name", {}) or {}, raw.get("by_pseudocode_hash", {}) or {}
 
 WEB_DESC_LIMIT = 220
@@ -242,7 +242,7 @@ def extract_types(records_path: Path) -> dict[str, dict]:
     type_token = re.compile(r"\b(?:__\w+|sv\w+_t|\w+_t)\b")
     seen: set[str] = set()
     out: dict[str, dict] = {}
-    with records_path.open() as f:
+    with records_path.open(encoding="utf-8") as f:
         for line in f:
             r = json.loads(line)
             for tok in type_token.findall(r["definition"]):
@@ -266,7 +266,7 @@ def load_verifier_examples() -> dict[str, dict]:
     if not VERIFIER_CACHE_DIR.is_dir():
         return out
     for shard in sorted(VERIFIER_CACHE_DIR.glob("*.jsonl")):
-        with shard.open() as f:
+        with shard.open(encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -373,7 +373,7 @@ def main():
     by_canonical: dict[str, dict] = {}
     alias_targets: dict[str, list[str]] = {}
 
-    with SRC.open() as f:
+    with SRC.open(encoding="utf-8") as f:
         for line in f:
             r = json.loads(line)
             name = r["intrinsic"]
@@ -521,8 +521,8 @@ def main():
         "clusters": clusters,
     }
 
-    (DIST / "simd-names.json").write_text(_dump_names(names_doc))
-    (DIST / "simd-data.json").write_text(_dump_data(data_doc))
+    (DIST / "simd-names.json").write_text(_dump_names(names_doc), encoding="utf-8")
+    (DIST / "simd-data.json").write_text(_dump_data(data_doc), encoding="utf-8")
 
     names_size = (DIST / "simd-names.json").stat().st_size
     data_size = (DIST / "simd-data.json").stat().st_size

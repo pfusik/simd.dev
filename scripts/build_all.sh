@@ -33,6 +33,14 @@ if [[ -z "$PY" ]]; then
 fi
 echo ">> using $PY ($("$PY" --version 2>&1))"
 
+# Force UTF-8 I/O across the pipeline. On non-UTF-8 Windows locales
+# (cp1250, cp1252, cp932, ...) Python's default file encoding can't
+# represent characters that appear in upstream JSON, like the U+221E
+# infinity sign in ARM ACLE pseudocode. The individual scripts pass
+# encoding="utf-8" explicitly, but PYTHONUTF8=1 covers any text I/O
+# we might add later -- and any subprocess that inherits the env.
+export PYTHONUTF8=1
+
 if [[ "${1:-}" == "--refresh" ]]; then
   echo ">> --refresh: clearing cache/"
   rm -rf cache/

@@ -177,12 +177,12 @@ def extract_asm_form(name: str, rec: dict, sdk: str | None) -> str | None:
         with tempfile.TemporaryDirectory() as td:
             s = Path(td) / "h.cc"
             o = Path(td) / "h.o"
-            s.write_text(src)
+            s.write_text(src, encoding="utf-8")
             cmd = [CLANG, "-O2", "-c"]
             if sdk:
                 cmd += ["-isysroot", sdk]
             cmd += flags + [str(s), "-o", str(o)]
-            r = subprocess.run(cmd, capture_output=True, text=True)
+            r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
             if r.returncode != 0:
                 continue
             dis = subprocess.run(
@@ -196,6 +196,7 @@ def extract_asm_form(name: str, rec: dict, sdk: str | None) -> str | None:
                 ],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
             ).stdout
             break
     if dis is None:
@@ -237,14 +238,14 @@ def _run_mca(form: str) -> dict[str, list]:
     microarchs. Returns {microarch: [uops, latency, rThroughput]}."""
     out: dict[str, list] = {}
     for mcpu in MICROARCHS:
-        with tempfile.NamedTemporaryFile("w", suffix=".s", delete=False) as f:
+        with tempfile.NamedTemporaryFile("w", suffix=".s", delete=False, encoding="utf-8") as f:
             f.write(form + "\n")
             sp = f.name
         try:
             r = subprocess.run(
                 [str(LLVM_MCA), "-mtriple=aarch64",
                  f"-mcpu={mcpu}", "--instruction-info", sp],
-                capture_output=True, text=True,
+                capture_output=True, text=True, encoding="utf-8",
             )
         finally:
             Path(sp).unlink(missing_ok=True)
@@ -277,7 +278,7 @@ def _extract_one(item):
 def main() -> int:
     print(f"Reading {DB_PATH}...")
     records: dict[str, dict] = {}
-    with DB_PATH.open() as f:
+    with DB_PATH.open(encoding="utf-8") as f:
         for line in f:
             r = json.loads(line)
             n = r["intrinsic"]
@@ -331,7 +332,8 @@ def main() -> int:
             separators=(",", ":"),
             sort_keys=True,
         )
-        + "\n"
+        + "\n",
+        encoding="utf-8",
     )
     size = OUT_PATH.stat().st_size
     print(f"wrote {OUT_PATH}: {size:,} bytes "

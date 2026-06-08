@@ -41,7 +41,7 @@ NAME_RE = re.compile(r"^_[A-Za-z][\w]*$")
 
 
 def parse_file(path: Path) -> dict[str, str]:
-    src = path.read_text(errors="replace")
+    src = path.read_text(encoding="utf-8", errors="replace")
     lines = src.split("\n")
     n = len(lines)
     out: dict[str, str] = {}
@@ -129,7 +129,7 @@ def main():
         for k, v in d.items():
             merged.setdefault(k, v)
 
-    OUT.write_text(json.dumps(merged, ensure_ascii=False, indent=0))
+    OUT.write_text(json.dumps(merged, ensure_ascii=False, indent=0), encoding="utf-8")
     print(f"wrote {len(merged)} descriptions -> {OUT.relative_to(ROOT)}")
     # Quick samples
     samples = ["_mm_add_epi32", "_mm256_permutevar8x32_epi32", "_mm512_add_pd",
