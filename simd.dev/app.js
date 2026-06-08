@@ -88,7 +88,9 @@
         // the output as stale (grayed out) until a fresh "update (via
         // CE)" finishes, AND mirror the value into the sibling cell so
         // the dec and hex spellings stay in sync regardless of which
-        // base is currently visible.
+        // base is currently visible. The status text points at whichever
+        // button the user actually has: ↻ update if live recompile is
+        // wired up, ↗ see on CE if only the view-harness button is.
         $card.addEventListener('input', (ev) => {
             const cell = ev.target.closest('.ex-cell[contenteditable]');
             if (!cell) return;
@@ -96,7 +98,13 @@
             if (wrap) wrap.classList.add('is-stale');
             const status = wrap && wrap.querySelector('.ex-status');
             if (status) {
-                status.textContent = 'edited — click update to recompile';
+                const hasRun = !!(wrap && wrap.querySelector('.ex-run'));
+                const hasSee = !!(wrap && wrap.querySelector('.ex-see'));
+                status.textContent = hasRun
+                    ? 'edited — click "↻ update" to recompile'
+                    : hasSee
+                        ? 'edited — click "↗ see on CE" to recompile'
+                        : 'edited';
                 status.className = 'ex-status is-stale';
             }
             mirrorEditedSibling(cell);
