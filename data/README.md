@@ -113,21 +113,22 @@ scripts/build_all.sh             # cached re-run, fast (~seconds)
 scripts/build_all.sh --refresh   # nuke cache/, fetch everything fresh
 ```
 
-Dependencies: `bash`, `curl`, `python3` (stdlib only — no pip install).
+Dependencies: `python3` (stdlib only — no pip install). `bash` is only
+needed for `build_all.sh`; the individual steps are all Python.
 
 The pipeline is four steps; `build_all.sh` runs them in order:
 
-1. `scripts/fetch.sh`             — downloads ARM JSON + Intel XML to `cache/`.
-2. `scripts/fetch_llvm_descs.sh`  — downloads ~130 clang x86 headers to `cache/llvm_headers/` (filtered by name regex; allowlist is in the script).
+1. `scripts/fetch.py`              — downloads ARM JSON + Intel XML to `cache/`.
+2. `scripts/fetch_llvm_descs.py`   — downloads ~130 clang x86 headers to `cache/llvm_headers/` (filtered by name regex; allowlist is in the script).
 3. `scripts/extract_llvm_descs.py` — parses Doxygen blocks, writes `cache/llvm_descriptions.json`.
-4. `scripts/build_db.py`          — joins everything, writes `data/intrinsics.jsonl` and `data/stats.json`.
+4. `scripts/build_db.py`           — joins everything, writes `data/intrinsics.jsonl` and `data/stats.json`.
 
 Each step is idempotent. Caching: fetch scripts skip files already on
 disk; `build_db.py` always re-derives from cache.
 
 ### Maintenance gotcha
 
-The LLVM header allowlist in `scripts/fetch_llvm_descs.sh` is hand-curated
+The LLVM header allowlist in `scripts/fetch_llvm_descs.py` is hand-curated
 (regex `KEEP`). When LLVM ships a brand-new `*intrin.h` in a future AVX10.x
 extension, that header won't be picked up until the regex is extended. ARM
 and Intel sources auto-update without code changes.
