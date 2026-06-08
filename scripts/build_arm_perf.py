@@ -109,15 +109,32 @@ _ALWAYS_BORING = {
     "stp", "ldp", "stur", "ldur",
     "adrp", "adr", "movk", "movz", "movn",
 }
-# Mnemonics that could be scaffolding OR a vector op: distinguish by
-# operand shape. `add x29, sp, #0x20` is scaffolding; `add v0.4s, ...`
-# is the intrinsic's body.
-_GP_REG_RE = re.compile(r"\b(?:[wx](?:\d+|zr)|sp)\b")
-_VEC_OPERAND_RE = re.compile(r"\bv\d+\.\d+[bhsdq]\b|\bs\d+\b|\bd\d+\b|\bq\d+\b|\bh\d+\b|\b[vqdsh]\d+\b")
+# Registers that mark a line as ABI scaffolding when they appear in
+# any operand: stack pointer, frame pointer (x29/fp), link register
+# (x30/lr). Real intrinsic lowerings under -O2 use arbitrary GP/vec
+# registers (w0/x0/v0...), never the frame regs.
+_FRAME_REG_RE = re.compile(r"\b(?:sp|x29|fp|x30|lr|w29|w30)\b")
+# FP / vector registers (v0.4s, q1, d2, s3, h4, b5). When a line uses
+# one of these, it's the SIMD/FP body of the intrinsic; lines that are
+# pure GP arithmetic alongside it are usually result-extraction
+# (e.g. `csetm w0, eq` after `fcmp s0, s1`) and we prefer the FP/vec
+# line as the dominant op.
+_VEC_OPERAND_RE = re.compile(
+    r"\bv\d+\.\d+[bhsdq]\b|\b[vqdshb]\d+\b"
+)
 
 
 def _is_interesting(line: str) -> bool:
-    """Reject scaffolding lines so we land on the SIMD op."""
+    """Reject scaffolding lines so we land on the intrinsic's body.
+
+    The body can be a vector op (`add v0.4s, ...`), a scalar FP op
+    (`fcmp s0, s1`, `fcvtzu h0, h0`), or a scalar GP op
+    (`crc32b w0, w1, w2`, `add x0, x1, x2` from vaddd_s64) -- all of
+    which we want. What we reject is anything that touches a frame
+    register (sp/x29/x30) under any mnemonic, or one of the known-
+    scaffolding mnemonics outright. Picking the *dominant* line from
+    the interesting set is the caller's job; see `extract_asm_form`.
+    """
     parts = line.split(None, 1)
     if not parts:
         return False
@@ -125,17 +142,16 @@ def _is_interesting(line: str) -> bool:
     if mnem in _ALWAYS_BORING:
         return False
     operands = parts[1] if len(parts) > 1 else ""
-    # If the operands are vector/FP registers (v0.4s, q1, s2, ...),
-    # the line is interesting regardless of mnemonic. If they're
-    # purely GP/SP registers, it's frame setup.
-    has_vec = bool(_VEC_OPERAND_RE.search(operands))
-    if has_vec:
-        return True
-    has_only_gp = bool(_GP_REG_RE.search(operands)) and not has_vec
-    if has_only_gp:
-        # Things like `add x29, sp, #0x20` -> scaffolding.
+    if _FRAME_REG_RE.search(operands):
         return False
     return True
+
+
+def _has_vec_operand(line: str) -> bool:
+    """True if this disassembly line uses a vector / FP register."""
+    parts = line.split(None, 1)
+    operands = parts[1] if len(parts) > 1 else ""
+    return bool(_VEC_OPERAND_RE.search(operands))
 
 
 _LINE_RE = re.compile(r"^\s*[0-9a-f]+:\s+(.+)$", re.IGNORECASE)
@@ -195,12 +211,15 @@ def extract_asm_form(name: str, rec: dict, sdk: str | None) -> str | None:
             interesting.append(body)
     if not interesting:
         return None
-    # The dominant SIMD line is the first non-boring instruction;
-    # subsequent ones are usually `ret` (already filtered) or another
-    # mov shuffle. Heuristic: pick the longest, since SIMD ops tend to
-    # have the most operands.
-    interesting.sort(key=len, reverse=True)
-    return interesting[0]
+    # The dominant line is usually the SIMD/FP op. When the wrapper
+    # also has GP result-extraction lines (e.g. `csetm w0, eq` after
+    # `fcmp s0, s1`, or `and w0, w8, #0xffff` after `fcvtzu h0, h0`),
+    # we prefer the FP/vec one. Within a tier (vec or GP-only), the
+    # longest line wins -- SIMD ops tend to have the most operands.
+    vec_lines = [l for l in interesting if _has_vec_operand(l)]
+    pool = vec_lines if vec_lines else interesting
+    pool.sort(key=len, reverse=True)
+    return pool[0]
 
 
 def _is_arm_simd(rec: dict) -> bool:
