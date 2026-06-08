@@ -494,7 +494,10 @@ def main():
     pseudocode_counter = Counter()
     by_source_family = {"arm-acle": Counter(), "intel-iguide": Counter()}
 
-    with out_path.open("w", encoding="utf-8") as out:
+    # newline="\n" keeps the committed JSONL line-ending-stable across
+    # platforms; Python's default text mode rewrites '\n' to '\r\n' on
+    # Windows, which would diff every record vs. macOS/Linux builds.
+    with out_path.open("w", encoding="utf-8", newline="\n") as out:
         for src_iter in (arm_records, intel_records):
             for rec in src_iter():
                 out.write(json.dumps(rec, ensure_ascii=False) + "\n")
@@ -518,7 +521,7 @@ def main():
         "by_family": dict(family_counter.most_common()),
         "by_source_family": {k: dict(v.most_common()) for k, v in by_source_family.items()},
     }
-    with stats_path.open("w", encoding="utf-8") as f:
+    with stats_path.open("w", encoding="utf-8", newline="\n") as f:
         json.dump(stats, f, indent=2)
 
     print(f"wrote {n} records -> {out_path.relative_to(ROOT)}")

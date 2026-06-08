@@ -371,6 +371,8 @@ def main() -> int:
         )
         + "\n",
         encoding="utf-8",
+        # Keep the committed dist file line-ending-stable on Windows.
+        newline="\n",
     )
     size = OUT_PATH.stat().st_size
     print(f"wrote {OUT_PATH}: {size:,} bytes "

@@ -6,12 +6,16 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$HERE"
 
-# Pick a Python 3.9+ interpreter. We require 3.9 because build_db.py and
-# extract_llvm_descs.py use PEP 585 generics (`dict[str, str]`, `list[X]`)
-# at runtime without `from __future__ import annotations`. Try `python3`
-# first (Unix convention), then `python` (Windows / some minimal envs).
+# Pick a Python 3.10+ interpreter. We need 3.10 because:
+# - build_db.py / extract_llvm_descs.py use PEP 585 generics at runtime
+#   without `from __future__ import annotations`.
+# - The build scripts call `Path.write_text(..., newline="\n")` to keep
+#   committed JSON / JSONL line-ending-stable across Windows; the
+#   `newline` kwarg on `write_text` was added in 3.10.
+# Try `python3` first (Unix convention), then `python` (Windows / some
+# minimal envs).
 MIN_MAJOR=3
-MIN_MINOR=9
+MIN_MINOR=10
 PY=""
 for candidate in python3 python; do
   if command -v "$candidate" >/dev/null 2>&1; then

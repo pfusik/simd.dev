@@ -521,8 +521,11 @@ def main():
         "clusters": clusters,
     }
 
-    (DIST / "simd-names.json").write_text(_dump_names(names_doc), encoding="utf-8")
-    (DIST / "simd-data.json").write_text(_dump_data(data_doc), encoding="utf-8")
+    # newline="\n" keeps these committed dist files line-ending-stable
+    # across Windows; without it, Python's text mode would rewrite the
+    # '\n's we embed in the JSON to '\r\n' on Windows runs.
+    (DIST / "simd-names.json").write_text(_dump_names(names_doc), encoding="utf-8", newline="\n")
+    (DIST / "simd-data.json").write_text(_dump_data(data_doc), encoding="utf-8", newline="\n")
 
     names_size = (DIST / "simd-names.json").stat().st_size
     data_size = (DIST / "simd-data.json").stat().st_size
