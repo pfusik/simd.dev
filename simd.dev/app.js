@@ -917,7 +917,12 @@
     function intelLaneInfoFor(intrinsicName, cType, context) {
         const bytesTotal = INTEL_VEC_BYTES[cType];
         if (bytesTotal == null) return null;
-        const epRe = /_e?p[iu](8|16|32|64)\b/g;
+        // `\b` doesn't fire between a digit and an `_` (both are word chars),
+        // so `_epi64_epi8` would only match the trailing `_epi8` in JS regex.
+        // Match the Python side (build_db / scribe) and use a lookahead for
+        // `_` or end-of-string: that catches both suffixes in
+        // `_mm_multishift_epi64_epi8`, `_mm_gf2p8affine_epi64_epi8`, etc.
+        const epRe = /_e?p[iu](8|16|32|64)(?=_|$)/g;
         const matches = [];
         let m;
         while ((m = epRe.exec(intrinsicName))) matches.push(m);
@@ -927,7 +932,7 @@
             const kind = /u/.test(pick[0]) ? 'uint' : 'int';
             return { bits, kind, count: (bytesTotal * 8) / bits };
         }
-        if (/_si\d+\b/.test(intrinsicName)) return { bits: 8, kind: 'uint', count: bytesTotal };
+        if (/_si\d+(?=_|$)/.test(intrinsicName)) return { bits: 8, kind: 'uint', count: bytesTotal };
         if (/_(?:ps|ss)\b/.test(intrinsicName)) return { bits: 32, kind: 'float', count: bytesTotal / 4 };
         if (/_(?:pd|sd)\b/.test(intrinsicName)) return { bits: 64, kind: 'float', count: bytesTotal / 8 };
         if (/_(?:ph|sh)\b/.test(intrinsicName)) return { bits: 16, kind: 'float', count: bytesTotal / 2 };
